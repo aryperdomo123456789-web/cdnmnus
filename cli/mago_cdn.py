@@ -220,6 +220,41 @@ def tenants_menu(db: Database) -> None:
         except Exception as exc: message("Falha na operação de tenant:\n\n" + str(exc))
 
 
+def vod_menu(db: Database) -> None:
+    """Gerencia fontes VOD isoladas por tenant/XUI."""
+    while True:
+        action = choose("Fontes VOD por XUI", [
+            ("list", "Listar fontes VOD cadastradas"),
+            ("add", "Adicionar fonte VOD"),
+            ("edit", "Editar fonte VOD"),
+            ("delete", "Apagar fonte VOD"),
+            ("back", "Voltar"),
+        ])
+        try:
+            if action in (None, "back"): return
+            tenants = db.tenants()
+            items = [(t["id"], u) for t in tenants for u in t["upstreams"] if u["kind"] == "vod"]
+            if action == "list":
+                message("FONTES VOD\n\n" + ("\n".join(f"{tid} | {u['host']}:{u['port']} | {u['id']}" for tid, u in items) or "Nenhuma fonte VOD cadastrada."))
+            elif action == "add":
+                tenant = choose("Tenant/XUI", [(t["id"], t["canonical_host"]) for t in tenants])
+                if tenant is None: continue
+                host = ask("Domínio VOD autorizado"); port = ask("Porta", "80")
+                if host is not None and port is not None:
+                    db.add_upstream(tenant, "vod", host, int(port)); message("Fonte VOD adicionada.\n\nExecute Deployments → Compilar release para publicar.")
+            elif action in ("edit", "delete"):
+                selected = choose("Selecionar fonte VOD", [(u["id"], f"{tid} — {u['host']}:{u['port']}") for tid, u in items])
+                if selected is None: continue
+                current = next(u for _, u in items if u["id"] == selected)
+                if action == "edit":
+                    host = ask("Novo domínio VOD", current["host"]); port = ask("Nova porta", str(current["port"]))
+                    if host is not None and port is not None:
+                        db.update_upstream(selected, host, int(port)); message("Fonte VOD atualizada. Execute o deploy para publicar.")
+                elif confirm(f"Apagar {current['host']} deste tenant?"):
+                    db.delete_upstream(selected); message("Fonte VOD removida. Execute o deploy para publicar.")
+        except Exception as exc: message("Falha na operação VOD:\n\n" + str(exc))
+
+
 def dns_menu(db: Database) -> None:
     try:
         matrix = db.sync_dns_matrix()
@@ -291,6 +326,7 @@ def main() -> int:
         action = choose("Menu Principal", [
             ("dashboard", "Dashboard multi-edge"), ("edges", "Gerenciar Edges"),
             ("tenants", "Gerenciar XUIs / Tenants / CNAMEs"), ("dns", "DNS e Failover"),
+            ("vod", "Fontes VOD por XUI (isoladas)"),
             ("deploy", "Deployments e rollout serial"), ("services", "Serviços e Nginx"),
             ("web", "Acesso e porta do painel web"), ("legacy", "Painel legado de perfil XUI ativo"),
             ("exit", "Sair"),
@@ -300,6 +336,7 @@ def main() -> int:
             if action == "dashboard": dashboard(db)
             elif action == "edges": edges_menu(db)
             elif action == "tenants": tenants_menu(db)
+            elif action == "vod": vod_menu(db)
             elif action == "dns": dns_menu(db)
             elif action == "deploy": deployments_menu(db)
             elif action == "services": services_menu()

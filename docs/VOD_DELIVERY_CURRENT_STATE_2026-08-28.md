@@ -139,6 +139,16 @@ O painel agora possui a seção **Fontes VOD**, com operações por tenant/XUI:
 - remover uma fonte;
 - enfileirar deploy serial após a alteração.
 
+O mesmo recurso está disponível no menu SSH unificado:
+
+```bash
+TERM=xterm-256color mago-cdn
+```
+
+No **Menu Principal**, escolha **Fontes VOD por XUI (isoladas)**. O menu legado
+continua acessível apenas para compatibilidade; ele não deve ser usado para
+editar a configuração nova, evitando que dois planos sobrescrevam o tráfego.
+
 As operações usam `tenant_upstreams` com `kind='vod'`. O renderizador cria
 upstreams, cache e rotas internas derivados do `tenant_id`; fontes de um XUI
 não são compartilhadas com outro XUI. O broker continua aceitando somente os
