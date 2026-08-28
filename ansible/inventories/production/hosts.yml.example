@@ -1,12 +1,22 @@
 all:
   children:
     cdn_edges:
-      hosts:
-        edge-example:
-          ansible_host: 203.0.113.10
-          ansible_port: 22
-          ansible_ssh_private_key_file: /etc/cdnmnus/ssh/edge-example.ed25519
+      children:
+        lb:
+          hosts:
+            lb-example:
+              ansible_host: 203.0.113.10
+              ansible_ssh_private_key_file: /etc/cdnmnus/ssh/lb-example.ed25519
+        edge_primary:
+          hosts:
+            edge-primary-example:
+              ansible_host: 203.0.113.11
+              ansible_ssh_private_key_file: /etc/cdnmnus/ssh/edge-primary-example.ed25519
+        edge_secondary:
+          hosts:
+            edge-secondary-example:
+              ansible_host: 203.0.113.12
+              ansible_ssh_private_key_file: /etc/cdnmnus/ssh/edge-secondary-example.ed25519
       vars:
         ansible_user: cdn-deploy
         ansible_become: true
-
