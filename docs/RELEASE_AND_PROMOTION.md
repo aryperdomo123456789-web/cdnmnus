@@ -15,6 +15,23 @@ O `release_id` e o `config_digest` do manifesto devem ser iguais em LB, edge
 primária e edge secundária. O inventário define apenas o destino; não altera o
 artefato.
 
+## Pré-requisitos da VPS antes da senha
+
+Antes de abrir o menu para uma nova edge, confirme no console do provedor:
+
+- Ubuntu 20.04, 22.04 ou 24.04 64-bit, com pelo menos 1 vCPU, 1 GB RAM e 10 GB livres;
+- IPv4 público dedicado e horário/NTP correto;
+- SSH acessível na porta escolhida, com `root` (ou usuário com `sudo`) e senha
+  inicial temporária;
+- saída TCP para a origem XUI/LB e para os repositórios Ubuntu;
+- portas TCP 22, 80 e 443 permitidas no firewall do provedor;
+- console/VNC de recuperação disponível antes de ativar UFW.
+
+O bootstrap não grava a senha. Ele cria `cdn-deploy`, instala a chave Ed25519,
+valida o fingerprint confirmado pelo operador e então o orquestrador instala o
+runtime. O certificado TLS precisa ser distribuído/emitido antes de a edge ser
+publicada no DNS.
+
 ## Instalação por papel
 
 No control node, copie o inventário local a partir do exemplo, preencha os IPs e
