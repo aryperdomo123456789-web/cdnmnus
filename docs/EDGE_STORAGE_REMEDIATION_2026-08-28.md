@@ -66,3 +66,22 @@ journalctl --disk-usage
 O espaço livre atual permite nova operação, mas o rollout só deve ser tentado
 após corrigir a causa do erro Ansible e confirmar que as três edges estão no
 mesmo banco de configuração e na mesma release.
+
+## Verificação do hostname público
+
+Durante a validação paralela, `cdn.phpd77.com` respondeu com resultados
+ diferentes por edge:
+
+- `143.14.168.111`: página controlada **Mago Edge Infrastructure**;
+- `143.14.168.168` e `143.14.168.170`: página padrão **Welcome to nginx!** na
+  rota `/`.
+
+O vhost de 168/170 contém `server_name cdn.phpd77.com` e está sintaticamente
+correto; a rota genérica `/` encaminha para a origem, que devolve a página
+default do Nginx. Isso não é vazamento do `Location` VOD, mas é uma exposição
+indesejada de fingerprint. A próxima release deve adicionar uma localização
+exata `= /` com placebo controlado, preservando as rotas de API, HLS, movie e
+series.
+
+Não alterar a página por edição manual isolada: corrigir o template/renderizador,
+gerar release, aplicar serialmente e validar cada edge.
