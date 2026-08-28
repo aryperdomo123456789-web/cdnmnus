@@ -18,6 +18,7 @@ DRY_RUN=0
 NO_FIREWALL=0
 ASSUME_YES=0
 SSH_PORT=22
+WITH_PANEL=0
 
 CPU_CORES=1
 MEM_MB=512
@@ -51,6 +52,7 @@ Opções:
   --main-port PORTA       Porta do backend (padrão: 3000)
   --domain DOMÍNIO        server_name do Nginx (padrão: _)
   --ssh-port PORTA        Porta SSH a liberar no UFW (padrão: 22)
+  --with-panel            Instalar painel autenticado em localhost:9090
   --no-firewall           Não aplicar as regras UFW
   --dry-run               Apenas validar e mostrar o plano, sem alterar o sistema
   --yes                   Aceitar o resumo sem confirmação interativa
@@ -84,6 +86,10 @@ parse_args() {
         [[ $# -ge 2 ]] || die "--ssh-port exige um valor."
         SSH_PORT="$2"
         shift 2
+        ;;
+      --with-panel)
+        WITH_PANEL=1
+        shift
         ;;
       --no-firewall)
         NO_FIREWALL=1
@@ -238,6 +244,7 @@ confirm_plan() {
   printf '  worker_connections:   %s\n' "$WORKER_CONNECTIONS"
   printf '  limite de arquivos:   %s\n' "$WORKER_RLIMIT_NOFILE"
   printf '  Firewall UFW:          %s\n' "$([[ $NO_FIREWALL -eq 1 ]] && printf 'não alterar' || printf 'aplicar hardening; SSH %s' "$SSH_PORT")"
+  printf '  Painel autenticado:    %s\n' "$([[ $WITH_PANEL -eq 1 ]] && printf 'instalar em 127.0.0.1:9090' || printf 'não instalar')"
   printf '  Modo:                  %s\n' "$([[ $DRY_RUN -eq 1 ]] && printf 'dry-run' || printf 'instalação')"
 
   if (( DRY_RUN == 1 || ASSUME_YES == 1 )) || [[ ! -t 0 ]]; then
@@ -334,6 +341,33 @@ run_firewall() {
   fi
 }
 
+install_panel() {
+  (( WITH_PANEL == 0 )) && return
+  if (( DRY_RUN == 1 )); then
+    log "dry-run: painel seria instalado em 127.0.0.1:9090."
+    return
+  fi
+  [[ -f "$ASSET_DIR/panel/panel.py" && -f "$ASSET_DIR/panel/cdnmnus-panel.service" ]] || die "Arquivos do painel não encontrados."
+  local panel_dir="/opt/cdnmnus-panel"
+  local env_file="/etc/cdnmnus/panel.env"
+  local password
+  install -d -m 0755 "$panel_dir" /etc/cdnmnus
+  install -m 0755 "$ASSET_DIR/panel/panel.py" "$panel_dir/panel.py"
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-panel.service" /etc/systemd/system/cdnmnus-panel.service
+  if [[ -f "$env_file" ]] && grep -q '^CDNMNUS_PANEL_PASSWORD=' "$env_file"; then
+    password="$(sed -n 's/^CDNMNUS_PANEL_PASSWORD=//p' "$env_file")"
+  else
+    password="$(openssl rand -base64 24 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 24)"
+    [[ -n "$password" ]] || die "Não foi possível gerar a credencial do painel."
+    umask 077
+    printf 'CDNMNUS_PANEL_USER=admin\nCDNMNUS_PANEL_PASSWORD=%s\n' "$password" > "$env_file"
+    chmod 0600 "$env_file"
+    log "Credencial inicial do painel (guarde-a agora): usuário=admin senha=$password"
+  fi
+  systemctl daemon-reload
+  systemctl enable --now cdnmnus-panel.service
+}
+
 deploy_nginx() {
   (( DRY_RUN == 1 )) && return
   [[ -d /etc/nginx ]] || die "/etc/nginx não existe após a instalação do pacote."
@@ -384,6 +418,7 @@ main() {
   run_tuning
   deploy_nginx
   run_firewall
+  install_panel
 
   log "Instalação concluída com sucesso. Nginx está encaminhando para http://$BACKEND_SERVER."
   log "Health check local: curl -i http://127.0.0.1/nginx-health"

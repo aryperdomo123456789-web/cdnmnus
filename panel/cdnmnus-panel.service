@@ -1,0 +1,23 @@
+[Unit]
+Description=cdnmnus upstream configuration panel
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/cdnmnus-panel
+ExecStart=/usr/bin/python3 /opt/cdnmnus-panel/panel.py
+Restart=on-failure
+RestartSec=3
+EnvironmentFile=-/etc/cdnmnus/panel.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/etc/cdnmnus /etc/nginx/conf.d
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

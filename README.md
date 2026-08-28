@@ -156,3 +156,37 @@ Este repositório é distribuído conforme a licença presente em `LICENSE`, qua
 [2]: https://manpages.ubuntu.com/manpages/jammy/en/man8/ufw.8.html Ubuntu UFW manpage — referência do utilitário de firewall.
 
 [3]: https://man7.org/linux/man-pages/man5/sysctl.d.5.html `sysctl.d(5)` — formato e persistência de parâmetros de kernel.
+
+## Painel de upstream HTTP autorizado
+
+O instalador pode adicionar um painel administrativo mínimo e autenticado para apontar a VPS para um XUI autorizado por **IP ou DNS**, sempre usando HTTP na porta 80:
+
+```bash
+sudo ./install.sh --with-panel --main-port 3000 --domain vps.exemplo.com
+```
+
+O painel escuta somente em `127.0.0.1:9090`; ele não deve ser aberto diretamente na Internet. Para acessá-lo com segurança a partir do seu computador, use um túnel SSH:
+
+```bash
+ssh -L 9090:127.0.0.1:9090 usuario@IP_DA_VPS
+```
+
+Depois abra `http://127.0.0.1:9090/`. A senha inicial é gerada aleatoriamente, exibida uma única vez pelo instalador e armazenada em `/etc/cdnmnus/panel.env` com permissão `0600`. O serviço roda como `cdnmnus-panel.service`, limitado a localhost, com `NoNewPrivileges`, `PrivateTmp` e escrita somente nos diretórios de configuração necessários.
+
+O painel valida o host, resolve o DNS, aceita somente porta 80, grava o estado em `/etc/cdnmnus/upstream.json`, gera `/etc/nginx/conf.d/99-cdnmnus-upstream.conf`, executa `nginx -t` e somente então recarrega o Nginx. A configuração não armazena usuário ou senha de playlist, e os logs do painel removem query strings.
+
+### Ocultação do upstream
+
+A configuração dinâmica remove os headers `Location`, `Server`, `Via` e `X-Powered-By`, desliga `proxy_redirect` e encaminha o `Host` do upstream apenas na conexão interna entre Nginx e XUI. Para playlists textuais, o `sub_filter` reescreve referências textuais ao host configurado para o host público recebido pelo cliente.
+
+> Isso reduz vazamentos comuns, mas não é uma garantia universal de anonimato. URLs assinadas, domínios alternativos, manifests HLS que usem hosts diferentes, conteúdo binário, mensagens de erro da aplicação e dados embutidos no próprio stream podem revelar informações. O resultado precisa ser validado no XUI autorizado e no conteúdo real que ele entrega.
+
+O endpoint público deve ser acessado pelo domínio ou IP da VPS, nunca pelo endereço de origem. Também é necessário garantir que o DNS público da VPS não aponte para o XUI e que a porta 80 do XUI esteja protegida por firewall para aceitar somente a VPS, quando a topologia permitir.
+
+### Testes no laboratório
+
+Foram feitos testes passivos nos endereços de laboratório fornecidos, sem imprimir credenciais nem salvar a playlist completa. O IP e o DNS responderam `200 OK`; o endpoint de playlist começou a entregar dados, mas permaneceu contínuo e excedeu o limite de tempo após aproximadamente 1,8 MB. A página base do DNS também devolveu um header `Link` canônico referenciando o domínio de origem, confirmando que headers precisam ser ocultados ou reescritos.
+
+No ambiente local, passaram a sintaxe Python e Bash, a validação de IP/DNS, a rejeição de comandos injetados e URLs com esquema, a geração do include Nginx e os smoke tests existentes. O sandbox não possui o binário Nginx nem permite instalar UFW, portanto a validação final de `nginx -t`, reload e regras do firewall deve ocorrer na VPS autorizada.
+
+O painel não deve ser usado para mascarar a origem de serviços de terceiros sem autorização. Em produção, mantenha o acesso administrativo por túnel SSH/VPN, use HTTPS na camada pública quando o domínio estiver pronto e troque a credencial inicial imediatamente.
