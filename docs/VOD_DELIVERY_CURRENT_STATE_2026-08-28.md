@@ -128,3 +128,31 @@ ativo e constitui evidência útil, mas não prova que o novo plano de controle
 esteja entregando VOD. O próximo passo seguro é alinhar a configuração legada
 funcional ao modelo `vod_hosts` do painel, preservando backup e rollback antes
 de alterar o DNS ou introduzir o Load Balancer `143.14.168.66`.
+
+## Gerenciamento implementado no `mago-cdn`
+
+O painel agora possui a seção **Fontes VOD**, com operações por tenant/XUI:
+
+- adicionar domínio e porta;
+- listar fontes existentes;
+- editar uma fonte;
+- remover uma fonte;
+- enfileirar deploy serial após a alteração.
+
+As operações usam `tenant_upstreams` com `kind='vod'`. O renderizador cria
+upstreams, cache e rotas internas derivados do `tenant_id`; fontes de um XUI
+não são compartilhadas com outro XUI. O broker continua aceitando somente os
+hosts cadastrados para aquele tenant e mantém o limite de redirects.
+
+Rotas administrativas:
+
+```text
+POST   /api/vod-sources
+PATCH  /api/vod-sources/{id}
+DELETE /api/vod-sources/{id}
+```
+
+O cadastro não altera uma edge imediatamente. Depois de salvar, use **DNS &
+Failover → Deploy serial**, valide `nginx -t` e confirme a reprodução antes de
+remover qualquer configuração legada. A implementação está no commit `57684b6`
+da branch `production/2026-08-28`.
