@@ -11,6 +11,7 @@ WorkingDirectory=/opt/cdnmnus
 EnvironmentFile=/etc/cdnmnus/admin.env
 Environment="PYTHONPATH=/opt/cdnmnus"
 Environment="PATH=/opt/cdnmnus/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+Environment="ANSIBLE_CONFIG=/opt/cdnmnus/ansible/ansible.cfg"
 ExecStart=/opt/cdnmnus/venv/bin/python3 /opt/cdnmnus/orchestrator/worker.py
 Restart=on-failure
 RestartSec=3
