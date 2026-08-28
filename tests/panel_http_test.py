@@ -40,3 +40,23 @@ status, _ = request("GET", "/")
 assert status == 401
 server.shutdown()
 print("panel HTTP auth/config checks: OK")
+
+config = {
+    "upstream_host": "meetaplay.site",
+    "upstream_port": 80,
+    "resolved_addresses": ["203.0.113.10"],
+    "public_host": "vps.example.com",
+}
+include = mod.render_include(config)
+for required in (
+    "proxy_hide_header Location;",
+    "proxy_redirect off;",
+    'sub_filter "http://meetaplay.site" "http://$host";',
+    'sub_filter "http://203.0.113.10" "http://$host";',
+    "proxy_set_header Host meetaplay.site;",
+):
+    assert required in include, required
+assert "\\n    sub_filter" not in include
+assert "sub_filter_once off;\n    sub_filter_types" in include
+assert "username=" not in include and "password=" not in include
+print("rendered include safeguards: OK")

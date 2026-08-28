@@ -102,13 +102,30 @@ def nginx_escape(value: str) -> str:
 
 def render_include(config: dict) -> str:
     host = config["upstream_host"]
+    server_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
     upstream_name = "cdnmnus_dynamic_backend"
-    # Host encaminhado ao upstream é o DNS configurado; o cliente nunca recebe
-    # esse valor em Location/headers por causa das diretivas de hide/redirect.
+    # O XUI pode devolver o DNS configurado ou o IP resolvido em playlists.
+    # Gera filtros para ambos, sem registrar tokens ou query strings.
+    filter_lines: list[str] = []
+    seen_filters: set[str] = set()
+    for candidate in [host, *config.get("resolved_addresses", [])]:
+        if not isinstance(candidate, str) or not valid_host(candidate):
+            continue
+        url_host = f"[{candidate}]" if ":" in candidate and not candidate.startswith("[") else candidate
+        for prefix, replacement_prefix in (("http://", "http://"), ("https://", "http://"), ("//", "//")):
+            for suffix in (":80", ""):
+                source = f"{prefix}{url_host}{suffix}"
+                replacement = f"{replacement_prefix}$host"
+                line = f'    sub_filter "{nginx_escape(source)}" "{nginx_escape(replacement)}";'
+                if line not in seen_filters:
+                    seen_filters.add(line)
+                    filter_lines.append(line)
+    filters = "\n".join(filter_lines)
+    # Host encaminhado ao upstream é usado somente na conexão interna.
     return f'''# Gerado pelo painel cdnmnus; não editar manualmente.
 # Upstream lógico configurado: {nginx_escape(host)} (não é publicado ao cliente)
 upstream {upstream_name} {{
-    server {nginx_escape(host)}:80 max_fails=3 fail_timeout=10s;
+    server {nginx_escape(server_host)}:80 max_fails=3 fail_timeout=10s;
     keepalive 32;
 }}
 
@@ -122,6 +139,7 @@ server {{
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header Connection "";
+    proxy_set_header Accept-Encoding "";
 
     proxy_hide_header Location;
     proxy_hide_header Server;
@@ -132,9 +150,8 @@ server {{
     # Reescreve somente URLs textuais que contenham o host configurado.
     # Conteúdos opacos, URLs assinadas ou domínios alternativos exigem revisão.
     sub_filter_once off;
-    sub_filter_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl text/plain text/html application/json;
-    sub_filter "http://{nginx_escape(host)}" "http://$host";
-    sub_filter "http://{nginx_escape(host)}:80" "http://$host";
+    sub_filter_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl text/plain application/json application/octet-stream;
+{filters}
 
     location = /nginx-health {{
         access_log off;
