@@ -4,6 +4,12 @@
 homologação. Este documento cruza o plano solicitado com o código existente em
 28/08/2026.
 
+**Estado operacional no momento da revisão:** as fontes `servicedovod.lat:80` e
+`zjo.lat:80` já estão cadastradas no tenant `xui-principal`, mas o deployment
+`dep-236418bec22841bca970fe4f4e8ab007` terminou em `failed` durante o Ansible.
+As edges ainda não devem ser consideradas convergentes; corrija o erro do
+deployment antes de qualquer teste de LB.
+
 ## 1. Estado real do código
 
 | Área | Evidência | Estado |
@@ -308,3 +314,76 @@ deve permanecer bloqueada até esses componentes existirem e serem testados.
 Até a conclusão desses itens, o comportamento correto é manter o menu de
 promoção indisponível e usar o runbook manual, evitando uma falsa sensação de
 alta disponibilidade.
+
+## 14. Receita mastigada de execução
+
+Não pule etapas e não altere o DNS antes do passo 20.
+
+### A — verificar a central
+
+1. Entre no servidor de controle como root.
+2. Execute `df -h /`; o uso deve estar abaixo de 80%.
+3. Execute `systemctl is-active cdnmnus-admin.service nginx.service cdnmnus-orchestrator.service`.
+4. Abra `TERM=xterm-256color mago-cdn`.
+5. Em **Gerenciar XUIs**, confirme origem, tenant e as fontes VOD autorizadas.
+6. Confirme que painel e worker usam `/var/lib/cdnmnus-admin/admin.db`.
+7. Nunca copie o SQLite ativo entre servidores.
+
+### B — cadastrar e preparar edges
+
+8. Em **Gerenciar Edges**, cadastre `143.14.168.111`, `.168` e `.170` sem
+   duplicar registros.
+9. Compare cada fingerprint SSH com o console do provedor.
+10. Aguarde bootstrap e preflight. `bootstrapping` não entra no DNS; somente
+    `ready` pode entrar no pool.
+11. Teste cada edge com o hostname canônico e `/edge-health`; espere HTTP 200.
+
+### C — publicar a mesma release
+
+12. Em **Fontes VOD por XUI**, confirme `servicedovod.lat:80` e `zjo.lat:80`.
+13. Em **Deployments e rollout serial**, escolha **Compilar release e
+    enfileirar deploy serial** uma única vez.
+14. Aguarde `running` e depois `succeeded`.
+15. Se ficar `queued`, corrija o worker/banco; se ficar `failed`, leia a causa e
+    não repita cegamente.
+16. Valide em cada edge `nginx -t`, TLS e versão da release.
+17. Teste `/movie/` e `/series/` com `Range`, seek, refresh e reprodução curta.
+
+### D — testar LB temporário na 111
+
+18. Coloque a 111 em `draining` e confirme 168/170 saudáveis.
+19. Instale o perfil LB dedicado na 111 e registre 168/170 como backends.
+20. Teste o LB com `curl --resolve cdn.phpd77.com:443:IP_DO_LB` e repita HLS,
+    filme, série, `Range` e refresh.
+21. Só após sucesso altere o DNS para o LB temporário.
+
+### E — adicionar e promover a 66
+
+22. Prepare `143.14.168.66` como edge sem alterar DNS.
+23. Distribua a mesma release e segredos não versionados; teste-a diretamente.
+24. Adicione-a como backend do LB 111 e teste falha/reinserção.
+25. Prepare backup e um segundo LB standby.
+26. Faça drain da 66, instale nela o perfil LB e restaure o snapshot aprovado.
+27. Valide TLS, backends, health e rollback.
+28. Troque o DNS para 66 somente após todos os testes.
+
+### F — recuperação
+
+29. Nunca promova duas máquinas simultaneamente.
+30. Adquira lock/quorum de promoção.
+31. Restaure o snapshot assinado e valide hashes.
+32. Publique DNS somente com o LB ativo e backends saudáveis.
+33. Registre release, horário, motivo, operador e resultado.
+
+### Resultado final esperado
+
+```text
+LB ativo:   143.14.168.66
+LB standby: 143.14.168.111 (ou outra VPS preparada)
+Edges:      143.14.168.168 e 143.14.168.170
+DNS:        cdn.phpd77.com aponta somente para o LB ativo
+VOD:        fontes isoladas por tenant e publicadas por release
+```
+
+Se uma etapa falhar, pare nela e preserve o estado anterior. Não faça alteração
+manual permanente para “forçar” o próximo passo.
