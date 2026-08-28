@@ -192,3 +192,19 @@ Foram feitos testes passivos nos endereços de laboratório fornecidos, sem impr
 No ambiente local, passaram a sintaxe Python e Bash, a validação de IP/DNS, a rejeição de comandos injetados e URLs com esquema, a geração do include Nginx e os smoke tests existentes. O sandbox não possui o binário Nginx nem permite instalar UFW, portanto a validação final de `nginx -t`, reload e regras do firewall deve ocorrer na VPS autorizada.
 
 O painel não deve ser usado para mascarar a origem de serviços de terceiros sem autorização. Em produção, mantenha o acesso administrativo por túnel SSH/VPN, use HTTPS na camada pública quando o domínio estiver pronto e troque a credencial inicial imediatamente.
+
+## Painel web no domínio público
+
+Quando o domínio público já aponta para a VPS, o painel pode ser acessado no navegador em:
+
+```text
+https://cdn.phpd77.com/admin/
+```
+
+O domínio é terminado com certificado TLS do Let's Encrypt na VPS. O usuário inicial configurado neste ambiente é `mago@dono.com`. A senha inicial deve ser tratada como temporária: no primeiro login, troque-a pela aba **Trocar senha** usando uma senha com pelo menos 12 caracteres. O acesso sem autenticação continua respondendo `401`.
+
+As configurações administrativas ficam em SQLite root-only em `/etc/cdnmnus/panel.db`, com senha armazenada por PBKDF2-HMAC-SHA256 e salt individual. O arquivo `/etc/cdnmnus/panel.env` mantém somente o usuário após o bootstrap; a senha plaintext inicial é removida. O banco contém o upstream e seus IPs resolvidos, portanto não deve ser copiado para diretórios públicos ou enviado para repositórios.
+
+A configuração pública atual usa `cdn.phpd77.com` como `server_name`. Para mudar futuramente o domínio da VPS ou o destino do XUI, abra `/admin/`, troque a senha inicial se ainda estiver pendente e preencha novamente o host do XUI e o domínio público. O painel valida, resolve, grava, testa com `nginx -t` e recarrega somente se a configuração for válida.
+
+O HTTPS é emitido apenas quando o DNS estiver resolvendo para a VPS e as portas 80/443 estiverem acessíveis. A renovação é mantida pelo agendamento do Certbot; após renovação, valide `nginx -t` e recarregue o Nginx.
