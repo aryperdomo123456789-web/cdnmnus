@@ -86,6 +86,15 @@ series.
 Não alterar a página por edição manual isolada: corrigir o template/renderizador,
 gerar release, aplicar serialmente e validar cada edge.
 
+## Resultado da correção do vhost raiz
+
+O renderizador central passou a emitir uma `location = /` com a tela estática
+Mago Edge. A release `20260828205036-b2a09f87` foi aplicada serialmente em
+`143.14.168.168` e `143.14.168.170`; ambas agora retornam a mesma página Mago
+Edge e não a página Debian “Welcome to nginx!”. `/edge-health` retorna HTTP 200
+nas três pontas. A edge `143.14.168.111` permaneceu no runtime legado para
+preservar a entrega atual e ainda precisa de migração controlada.
+
 ## Correção do deployment e resultado da reaplicação
 
 O erro original foi reproduzido com Ansible em modo detalhado. A tarefa que
