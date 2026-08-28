@@ -125,7 +125,14 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         if generated_inventory is not None:
             generated_inventory.unlink(missing_ok=True)
     state = "succeeded" if result.returncode == 0 else "failed"
-    error = None if result.returncode == 0 else "ansible-playbook falhou; consulte o journal sanitizado do orquestrador"
+    if result.returncode == 0:
+        error = None
+    else:
+        # O Ansible pode conter caminhos e nomes de hosts, mas não deve levar
+        # argv/env com credenciais. Guardamos somente as últimas linhas para
+        # diagnóstico operacional no painel/journal.
+        tail = "\n".join((result.stderr or result.stdout).splitlines()[-8:])
+        error = "ansible-playbook falhou; resumo sanitizado:\n" + tail[:2000]
     with db.connect() as conn:
         conn.execute("UPDATE deployments SET state=?,error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",
                      (state, error, deployment["id"]))
