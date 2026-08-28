@@ -95,6 +95,13 @@ Edge e não a página Debian “Welcome to nginx!”. `/edge-health` retorna HTT
 nas três pontas. A edge `143.14.168.111` permaneceu no runtime legado para
 preservar a entrega atual e ainda precisa de migração controlada.
 
+Na edge legada 111, a tela é servida pelo arquivo local
+`/var/www/mago-edge/index.html`. O rodapé foi atualizado nessa cópia para
+`2026 @MagoPD todos os direitos reservados.`. Para edges gerenciadas pela
+release, o texto deve ser alterado na string de `location = /` em
+`core/render_tenants.py` e publicado por nova release; não editar o vhost
+remoto diretamente.
+
 ## Correção do deployment e resultado da reaplicação
 
 O erro original foi reproduzido com Ansible em modo detalhado. A tarefa que
