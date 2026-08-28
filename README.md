@@ -1,5 +1,7 @@
 # cdnmnus
 
+Procedimentos completos de instalacao, atualizacao, acesso SSH e rollback: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 Instalador CLI modular para transformar uma instalação limpa do Ubuntu em um **reverse proxy Nginx enxuto, previsível e adaptativo**. O projeto usa Bash, Nginx nativo do sistema e utilitários padrão do Ubuntu, sem framework ou dependência pesada.
 
 > O objetivo é entregar uma base eficiente para VPS pequenas, sem sacrificar limites de conexão e arquivos em máquinas maiores. Não existe “número mágico” que sirva para todo hardware: o instalador calcula o perfil a partir de CPU e memória detectadas.

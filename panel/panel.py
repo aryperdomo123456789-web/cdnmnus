@@ -132,7 +132,7 @@ server {{
     # Reescreve somente URLs textuais que contenham o host configurado.
     # Conteúdos opacos, URLs assinadas ou domínios alternativos exigem revisão.
     sub_filter_once off;
-    sub_filter_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl text/plain text/html application/json;
+    sub_filter_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl text/plain application/json;
     sub_filter "http://{nginx_escape(host)}" "http://$host";
     sub_filter "http://{nginx_escape(host)}:80" "http://$host";
 

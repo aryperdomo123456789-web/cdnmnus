@@ -47,7 +47,7 @@ sed \
   -e 's|__WORKER_RLIMIT_NOFILE__|65536|g' \
   -e 's|__PROXY_BUFFER_SIZE__|8k|g' \
   -e 's|__PROXY_BUFFERS__|4 8k|g' \
-  -e 's|__PROXY_BUSY_BUFFERS__|32k|g' \
+  -e 's|__PROXY_BUSY_BUFFERS__|16k|g' \
   -e 's|__CLIENT_MAX_BODY_SIZE__|8m|g' \
   nginx/nginx.conf > "$rendered"
 if grep -Eq '__[A-Z_]+__' "$rendered"; then

@@ -8,6 +8,9 @@
 .cache/
 .DS_Store
 
+# Chaves privadas locais usadas para administrar o repositorio
+.github-deploy/
+
 # Python cache
 __pycache__/
 *.py[cod]
