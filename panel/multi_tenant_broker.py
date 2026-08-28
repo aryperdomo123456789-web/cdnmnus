@@ -82,6 +82,8 @@ class TenantState:
             if internal.startswith(source):
                 normalized = "lb_" if "lb_" in kind else "vod_"
                 return f"/__cdnmnus_{self.tenant_id}_{normalized}" + internal[len(source):]
+        if internal.startswith("/__cdnmnus_dynamic_vod/"):
+            return f"/__cdnmnus_{self.tenant_id}_dynamic_vod/" + internal[len("/__cdnmnus_dynamic_vod/"):]
         raise ValueError("rota interna desconhecida")
 
 

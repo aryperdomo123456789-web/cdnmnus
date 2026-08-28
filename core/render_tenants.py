@@ -83,12 +83,38 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
         proxy_cache_lock_timeout 2s;
         proxy_cache_lock_age 5s;
         proxy_buffering on;
+        slice 1m;
+        proxy_set_header Range $slice_range;
         proxy_read_timeout 300s;
         proxy_hide_header Location;
         proxy_hide_header Server;
     }}'''
         for index, _ in enumerate(cfg["vod"])
     )
+    dynamic_vod_location = f'''    # Redirect final dinâmico, somente emitido pelo broker após validação.
+    resolver 1.1.1.1 1.0.0.1 valid=60s ipv6=off;
+    location ~ ^/__cdnmnus_{tid}_dynamic_vod/([A-Za-z0-9.-]+)(/.+)$ {{
+        internal;
+        set $vod_dynamic_host $1;
+        set $vod_dynamic_path $2;
+        proxy_pass http://$vod_dynamic_host$vod_dynamic_path$is_args$args;
+        proxy_set_header Host $vod_dynamic_host;
+        proxy_cache cache_{tid};
+        proxy_cache_methods GET HEAD;
+        proxy_cache_key "{tid}|dynamic-vod|$vod_dynamic_host|$vod_dynamic_path";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
+        proxy_cache_valid 200 30s;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_buffering on;
+        slice 1m;
+        proxy_set_header Range $slice_range;
+        proxy_read_timeout 300s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+    }}'''
     content = f'''# Gerado pelo cdnmnus; não editar manualmente.
 proxy_cache_path /var/cache/nginx/cdnmnus/{tid} levels=1:2
     keys_zone=cache_{tid}:32m max_size=2g inactive=2m use_temp_path=off;
@@ -175,6 +201,8 @@ server {{
 {lb_locations}
 
 {vod_locations}
+
+{dynamic_vod_location}
 
     location / {{
         proxy_pass http://origin_{tid};

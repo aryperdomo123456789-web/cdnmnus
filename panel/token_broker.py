@@ -178,7 +178,10 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
     allowed = [origin, *vod_hosts]
     host, path = origin, uri
     for hop in range(5):
-        if host not in allowed:
+        # O primeiro salto precisa ser um fornecedor cadastrado. Saltos
+        # seguintes podem mudar de hostname como no navegador, mas continuam
+        # sujeitos a DNS público e ao limite de redirects.
+        if hop == 0 and host not in allowed:
             raise PermissionError("destino VOD fora da allowlist")
         address = validated_addresses(host)[0]
         connection = http.client.HTTPConnection(address, 80, timeout=8)
@@ -198,7 +201,11 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
         if response.status in (HTTPStatus.OK, HTTPStatus.PARTIAL_CONTENT):
             if host == origin:
                 return "/__cdnmnus_resolved_origin" + path
-            return f"/__cdnmnus_vod_{vod_hosts.index(host)}" + path
+            if host in vod_hosts:
+                return f"/__cdnmnus_vod_{vod_hosts.index(host)}" + path
+            # Host final descoberto pelo redirect, equivalente ao navegador.
+            # O prefixo é internal no Nginx; o cliente nunca pode fornecê-lo.
+            return f"/__cdnmnus_dynamic_vod/{host}{path}"
         if response.status not in (HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT):
             raise LookupError(f"vod_status_{response.status}")
         parsed = urlsplit(location)
