@@ -71,7 +71,19 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
         f'''    location ^~ /__cdnmnus_{tid}_vod_{index}/ {{
         internal;
         proxy_pass http://vod_{tid}_{index}/;
-        proxy_buffering off;
+        # Cache curto para abertura VOD; Range passa direto para preservar
+        # semântica de seek e não persistir respostas parciais.
+        proxy_cache cache_{tid};
+        proxy_cache_methods GET HEAD;
+        proxy_cache_key "{tid}|vod{index}|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
+        proxy_cache_valid 200 30s;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_buffering on;
+        proxy_read_timeout 300s;
         proxy_hide_header Location;
         proxy_hide_header Server;
     }}'''
