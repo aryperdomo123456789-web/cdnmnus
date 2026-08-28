@@ -85,3 +85,37 @@ series.
 
 Não alterar a página por edição manual isolada: corrigir o template/renderizador,
 gerar release, aplicar serialmente e validar cada edge.
+
+## Correção do deployment e resultado da reaplicação
+
+O erro original foi reproduzido com Ansible em modo detalhado. A tarefa que
+falhava era `Validar digest declarado`: o digest passado ao playbook não era o
+mesmo digest do `manifest.json`. Com o valor correto
+`9b729a8abaea32345c1e8b72cefead67e2c49246ab0440be1158e546260ed674`, a release
+`20260828200028-06ea5480` foi sincronizada com sucesso em `lb011` e `lb02`.
+
+Evidência remota:
+
+```text
+143.14.168.168 -> /opt/cdnmnus/releases/20260828200028-06ea5480/SYNCED
+143.14.168.170 -> /opt/cdnmnus/releases/20260828200028-06ea5480/SYNCED
+```
+
+Ambas responderam HTTP 200 em `/edge-health`; Nginx e o broker por tenant estão
+ativos. O registro histórico do deployment permanece `failed` porque a
+execução original falhou antes da reaplicação manual; ele não deve ser editado
+para aparentar sucesso. O worker precisa receber uma nova fila/release após o
+diagnóstico para registrar um deployment `succeeded` de forma auditável.
+
+A edge `143.14.168.111` não foi sobrescrita: ela permanece no runtime legado de
+controle e continua entregando a tela “Mago Edge Infrastructure”. A migração da
+111 para o runtime novo deve ocorrer em janela controlada, com drain e rollback.
+
+## Regra para a tela pública
+
+O vhost novo possui `/edge-health`, `/movie/`, `/series/` e `/hls/`. A rota raiz
+`/` em 168/170 ainda encaminha para a origem, que devolve “Welcome to nginx!”.
+Para padronizar a tela pública, a próxima release deve instalar uma localização
+exata `location = /` com a página estática Mago Edge, antes da localização
+genérica `/`. Isso deve ser feito no renderizador/release e validado com
+`nginx -t`; não editar o arquivo remoto manualmente.
