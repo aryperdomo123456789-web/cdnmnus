@@ -19,7 +19,7 @@ from core.deploy import claim_deployment, run_deployment
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker Ansible desacoplado cdnmnus")
     parser.add_argument("--db", default=os.environ.get("CDNMNUS_ADMIN_DB", "/etc/cdnmnus/admin.db"))
-    parser.add_argument("--playbook", default="ansible/playbooks/deploy-edge.yml")
+    parser.add_argument("--playbook", default="ansible/playbooks/deploy-and-activate-edge.yml")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     db = Database(args.db); db.initialize()
@@ -37,4 +37,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

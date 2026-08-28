@@ -90,7 +90,7 @@ def claim_deployment(db: Database) -> dict[str, Any] | None:
 
 
 def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Path | None = None,
-                   playbook: str | Path = "ansible/playbooks/deploy-edge.yml",
+                   playbook: str | Path = "ansible/playbooks/deploy-and-activate-edge.yml",
                    key_dir: str | Path = "/etc/cdnmnus/ssh") -> dict[str, Any]:
     if shutil.which("ansible-playbook") is None:
         error = "ansible-playbook não está instalado; instale ansible-core no control node"
@@ -107,10 +107,18 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
             os.close(fd)
         os.chmod(generated_inventory, 0o600)
         inventory = generated_inventory
+    tenants = db.tenants(enabled_only=True)
+    if not tenants:
+        raise ValueError("nenhum tenant habilitado para ativação da edge")
     command = ["ansible-playbook", "-i", str(inventory), str(playbook),
-               "--extra-vars", json.dumps({"release_id": deployment["release_id"],
-                                            "release_source": deployment["artifact_path"],
-                                            "config_digest": deployment["config_digest"]})]
+               "--extra-vars", json.dumps({
+                   "release_id": deployment["release_id"],
+                   "release_source": deployment["artifact_path"],
+                   "config_digest": deployment["config_digest"],
+                   "canonical_health_host": tenants[0]["canonical_host"],
+                   "tenant_ids": [item["id"] for item in tenants],
+                   "tenant_health_hosts": [{"host": item["canonical_host"]} for item in tenants],
+               })]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=3600, check=False)
     finally:

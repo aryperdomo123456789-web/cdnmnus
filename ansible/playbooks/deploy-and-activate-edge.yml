@@ -1,0 +1,6 @@
+---
+- name: Sincronizar release antes da ativação
+  ansible.builtin.import_playbook: deploy-edge.yml
+
+- name: Ativar runtime completo após sincronização
+  ansible.builtin.import_playbook: activate-edge.yml
