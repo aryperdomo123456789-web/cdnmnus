@@ -19,6 +19,8 @@ NO_FIREWALL=0
 ASSUME_YES=0
 SSH_PORT=22
 WITH_PANEL=0
+PANEL_USER="mago@dono.com"
+PANEL_PASSWORD=""
 
 CPU_CORES=1
 MEM_MB=512
@@ -53,6 +55,8 @@ Opções:
   --domain DOMÍNIO        server_name do Nginx (padrão: _)
   --ssh-port PORTA        Porta SSH a liberar no UFW (padrão: 22)
   --with-panel            Instalar painel autenticado em localhost:9090
+  --panel-user USER       Usuário inicial do painel (padrão: mago@dono.com)
+  --panel-password PASS   Senha inicial; será removida do env após bootstrap
   --no-firewall           Não aplicar as regras UFW
   --dry-run               Apenas validar e mostrar o plano, sem alterar o sistema
   --yes                   Aceitar o resumo sem confirmação interativa
@@ -90,6 +94,16 @@ parse_args() {
       --with-panel)
         WITH_PANEL=1
         shift
+        ;;
+      --panel-user)
+        [[ $# -ge 2 ]] || die "--panel-user exige um valor."
+        PANEL_USER="$2"
+        shift 2
+        ;;
+      --panel-password)
+        [[ $# -ge 2 ]] || die "--panel-password exige um valor."
+        PANEL_PASSWORD="$2"
+        shift 2
         ;;
       --no-firewall)
         NO_FIREWALL=1
@@ -171,6 +185,10 @@ validate_inputs() {
   # Permite IPv4, IPv6 sem colchetes e host DNS, sem aceitar caracteres de configuração.
   [[ "$MAIN_IP" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "--main-ip contém caracteres inválidos."
   [[ "$DOMAIN" =~ ^[A-Za-z0-9.*_-]+$ ]] || die "--domain contém caracteres inválidos."
+  if (( WITH_PANEL == 1 )); then
+    [[ "$PANEL_USER" =~ ^[^[:space:]=]+$ ]] || die "--panel-user contém caracteres inválidos."
+    [[ -z "$PANEL_PASSWORD" || "$PANEL_PASSWORD" != *$'\n'* ]] || die "--panel-password não pode conter quebra de linha."
+  fi
   [[ "$DOMAIN" != *.*.*.*.*.* ]] || die "--domain parece inválido demais para ser um server_name seguro."
 
   if [[ "$MAIN_IP" == *:* ]]; then
@@ -244,7 +262,7 @@ confirm_plan() {
   printf '  worker_connections:   %s\n' "$WORKER_CONNECTIONS"
   printf '  limite de arquivos:   %s\n' "$WORKER_RLIMIT_NOFILE"
   printf '  Firewall UFW:          %s\n' "$([[ $NO_FIREWALL -eq 1 ]] && printf 'não alterar' || printf 'aplicar hardening; SSH %s' "$SSH_PORT")"
-  printf '  Painel autenticado:    %s\n' "$([[ $WITH_PANEL -eq 1 ]] && printf 'instalar em 127.0.0.1:9090' || printf 'não instalar')"
+  printf '  Painel autenticado:    %s\n' "$([[ $WITH_PANEL -eq 1 ]] && printf 'instalar em 127.0.0.1:9090 (%s)' "$PANEL_USER" || printf 'não instalar')"
   printf '  Modo:                  %s\n' "$([[ $DRY_RUN -eq 1 ]] && printf 'dry-run' || printf 'instalação')"
 
   if (( DRY_RUN == 1 || ASSUME_YES == 1 )) || [[ ! -t 0 ]]; then
@@ -350,22 +368,31 @@ install_panel() {
   [[ -f "$ASSET_DIR/panel/panel.py" && -f "$ASSET_DIR/panel/cdnmnus-panel.service" ]] || die "Arquivos do painel não encontrados."
   local panel_dir="/opt/cdnmnus-panel"
   local env_file="/etc/cdnmnus/panel.env"
-  local password
+  local password="${PANEL_PASSWORD}"
   install -d -m 0755 "$panel_dir" /etc/cdnmnus
+  if [[ -z "$password" ]]; then
+    password="$(openssl rand -base64 32 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 32)"
+    [[ -n "$password" ]] || die "Não foi possível gerar a senha inicial do painel."
+    log "Senha inicial gerada; guarde-a agora: usuário=$PANEL_USER senha=$password"
+  fi
   install -m 0755 "$ASSET_DIR/panel/panel.py" "$panel_dir/panel.py"
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-panel.service" /etc/systemd/system/cdnmnus-panel.service
-  if [[ -f "$env_file" ]] && grep -q '^CDNMNUS_PANEL_PASSWORD=' "$env_file"; then
-    password="$(sed -n 's/^CDNMNUS_PANEL_PASSWORD=//p' "$env_file")"
-  else
-    password="$(openssl rand -base64 24 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 24)"
-    [[ -n "$password" ]] || die "Não foi possível gerar a credencial do painel."
-    umask 077
-    printf 'CDNMNUS_PANEL_USER=admin\nCDNMNUS_PANEL_PASSWORD=%s\n' "$password" > "$env_file"
-    chmod 0600 "$env_file"
-    log "Credencial inicial do painel (guarde-a agora): usuário=admin senha=$password"
-  fi
+  umask 077
+  printf 'CDNMNUS_PANEL_USER=%s\nCDNMNUS_PANEL_PASSWORD=%s\n' "$PANEL_USER" "$password" > "$env_file"
+  chmod 0600 "$env_file"
   systemctl daemon-reload
   systemctl enable --now cdnmnus-panel.service
+  for _ in 1 2 3 4 5; do
+    systemctl is-active --quiet cdnmnus-panel.service && break
+    sleep 1
+  done
+  systemctl is-active --quiet cdnmnus-panel.service || die "O serviço do painel não iniciou."
+  # Depois do primeiro bootstrap, o hash fica no SQLite; a senha plaintext sai do env.
+  sed -i '/^CDNMNUS_PANEL_PASSWORD=/d' "$env_file"
+  chmod 0600 "$env_file"
+  systemctl daemon-reload
+  systemctl restart cdnmnus-panel.service
+  log "Painel instalado em 127.0.0.1:9090; banco root-only em /etc/cdnmnus/panel.db."
 }
 
 deploy_nginx() {

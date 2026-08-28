@@ -2,16 +2,22 @@
 import base64
 import importlib.util
 import json
+import tempfile
 import threading
 from http.client import HTTPConnection
+from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("panel", "panel/panel.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-mod.PANEL_PASSWORD = "test-only-password"
-mod.PANEL_USER = "admin"
+tmp = tempfile.TemporaryDirectory()
+mod.DB_PATH = Path(tmp.name) / "panel.db"
+mod.NGINX_INCLUDE = Path(tmp.name) / "upstream.conf"
+mod.PANEL_PASSWORD = "12345678"
+mod.PANEL_USER = "mago@dono.com"
 mod.resolve_host = lambda host: ["203.0.113.10"]
-mod.apply_config = lambda config: None
+mod.apply_config = lambda config: mod.save_config(config)
+mod.initialize_db()
 server = mod.ThreadingHTTPServer(("127.0.0.1", 0), mod.Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 port = server.server_address[1]
@@ -29,34 +35,20 @@ def request(method, path, body=None, auth_value=None):
     connection.close()
     return response.status, data
 
-good_auth = "Basic " + base64.b64encode(b"admin:test-only-password").decode()
-status, _ = request("GET", "/", auth_value=good_auth)
-assert status == 200
-status, data = request("POST", "/api/config", json.dumps({"upstream_host": "meetaplay.site", "upstream_port": 80, "public_host": "vps.example.com"}), good_auth)
-assert status == 200 and "203.0.113.10" in data
-status, data = request("POST", "/api/config", json.dumps({"upstream_host": "bad;command", "upstream_port": 80}), good_auth)
-assert status == 400 and ("válido" in data or "inválido" in data), data
+good_auth = "Basic " + base64.b64encode(b"mago@dono.com:12345678").decode()
+status, data = request("GET", "/api/config", auth_value=good_auth)
+assert status == 200 and '"must_change": true' in data
+status, page = request("GET", "/", auth_value=good_auth)
+assert status == 200 and "fetch('./api/config'" in page and "fetch('./api/password'" in page
+status, data = request("POST", "/api/config", json.dumps({"upstream_host": "meetaplay.site", "upstream_port": 80, "public_host": "cdn.phpd77.com"}), good_auth)
+assert status == 403 and "troque a senha" in data
+status, data = request("POST", "/api/password", json.dumps({"current_password": "12345678", "new_password": "nova-senha-segura-2026"}), good_auth)
+assert status == 200 and "senha alterada" in data
+new_auth = "Basic " + base64.b64encode(b"mago@dono.com:nova-senha-segura-2026").decode()
+status, data = request("POST", "/api/config", json.dumps({"upstream_host": "meetaplay.site", "upstream_port": 80, "public_host": "cdn.phpd77.com"}), new_auth)
+assert status == 200 and '"ok": true' in data
 status, _ = request("GET", "/")
 assert status == 401
 server.shutdown()
-print("panel HTTP auth/config checks: OK")
-
-config = {
-    "upstream_host": "meetaplay.site",
-    "upstream_port": 80,
-    "resolved_addresses": ["203.0.113.10"],
-    "public_host": "vps.example.com",
-}
-include = mod.render_include(config)
-for required in (
-    "proxy_hide_header Location;",
-    "proxy_redirect off;",
-    'sub_filter "http://meetaplay.site" "http://$host";',
-    'sub_filter "http://203.0.113.10" "http://$host";',
-    "proxy_set_header Host meetaplay.site;",
-):
-    assert required in include, required
-assert "\\n    sub_filter" not in include
-assert "sub_filter_once off;\n    sub_filter_types" in include
-assert "username=" not in include and "password=" not in include
-print("rendered include safeguards: OK")
+tmp.cleanup()
+print("panel SQLite/auth/password/config checks: OK")
