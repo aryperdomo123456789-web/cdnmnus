@@ -271,6 +271,30 @@ de qualquer publicação. A adição de múltiplos A em `cdn.phpd77.com` só é 
 depois de fechar o estado compartilhado/renovação de tokens entre as edges;
 caso contrário, uma sessão iniciada em uma edge pode falhar ao trocar de edge.
 
+### 3.11 Incidente de reprodução e correção aplicada
+
+Durante a reprodução foram observados avisos recorrentes do Nginx
+`ignore long locked inactive cache entry`. A causa era a chave de cache contendo
+o query string completo; como cada segmento HLS possui token diferente, isso
+fragmentava o cache e acumulava locks. O renderer passou a usar `$uri`, aplicar
+`proxy_cache_lock_timeout`/`proxy_cache_lock_age` e bypass de cache para
+`Range`. O vhost ativo foi recarregado após `nginx -t`, e o cache antigo foi
+moviado para um diretório de recuperação, sem apagar dados de forma
+irreversível.
+
+Também foi confirmado que HLS voltou a responder ponta a ponta:
+
+```text
+manifesto de canal: HTTP 200
+segmento TS real:   HTTP 200 (~8,8 MB na amostra)
+/edge-health:        HTTP 200
+```
+
+O VOD continua bloqueado de forma intencional quando o XUI redireciona para um
+host novo não presente na allowlist (`solitary-cloud-*.workers.dev`). Esse host
+precisa ser validado e cadastrado como upstream VOD aprovado; aceitar qualquer
+redirect automaticamente seria uma falha crítica de segurança.
+
 Em 28/08/2026 foi validado o fluxo real do player contra a URL autorizada
 informada pelo operador, comparando o acesso público `cdn.phpd77.com` com a
 origem `38.46.223.77:80`.

@@ -123,6 +123,17 @@ server {{
         proxy_pass_request_body off;
     }}
 
+    # Manifestos emitidos pelo XUI usam /usuario/senha/id.m3u8. Eles também
+    # precisam passar pelo broker para refresh e fail-closed.
+    location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+
     location ~ ^/(?:movie|series)/ {{
         proxy_pass http://broker_{tid};
         proxy_set_header X-CDN-Tenant {tid};
@@ -136,8 +147,15 @@ server {{
         internal;
         proxy_pass http://origin_{tid}/;
         proxy_cache cache_{tid};
-        proxy_cache_key "{tid}|$request_method|$host|$request_uri";
+        # Tokens variam por segmento; não podem fragmentar o cache nem virar
+        # parte do identificador persistido. Range (VOD) nunca é cacheado.
+        proxy_cache_key "{tid}|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_read_timeout 20s;
         proxy_hide_header Location;
         proxy_hide_header Server;
     }}
