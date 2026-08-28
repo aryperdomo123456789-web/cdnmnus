@@ -7,8 +7,8 @@
   max_fail_percentage: 0
   vars:
     project_root: /opt/cdnmnus
-    tls_fullchain_source: "/etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem"
-    tls_privkey_source: "/etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem"
+    tls_fullchain_source: "/var/lib/cdnmnus-admin/tls-source/fullchain.pem"
+    tls_privkey_source: "/var/lib/cdnmnus-admin/tls-source/privkey.pem"
   roles:
     - edge_base
     - cdn_runtime
