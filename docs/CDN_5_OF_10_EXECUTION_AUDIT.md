@@ -295,6 +295,19 @@ host novo não presente na allowlist (`solitary-cloud-*.workers.dev`). Esse host
 precisa ser validado e cadastrado como upstream VOD aprovado; aceitar qualquer
 redirect automaticamente seria uma falha crítica de segurança.
 
+Revalidação em 28/08/2026 com a playlist autorizada:
+
+```text
+playlist HLS: 35,8 MB; 1.148 manifestos m3u8 observados
+primeiro VOD CDN com Range: HTTP 502 (destino bloqueado)
+redirect XUI: servicedovod.lat -> solitary-cloud-dee9.wngynm0s1kyp.workers.dev/bloqueado.mp4
+```
+
+O comportamento 502 é fail-closed e explica por que filmes/séries não abrem;
+não é falha de autenticação da playlist. A correção segura é cadastrar somente
+os domínios finais realmente pertencentes ao serviço VOD e redistribuir a
+configuração, mantendo o token temporário fora do cliente.
+
 Em 28/08/2026 foi validado o fluxo real do player contra a URL autorizada
 informada pelo operador, comparando o acesso público `cdn.phpd77.com` com a
 origem `38.46.223.77:80`.
