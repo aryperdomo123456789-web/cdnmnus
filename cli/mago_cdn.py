@@ -117,7 +117,22 @@ def edge_add(db: Database) -> None:
     finally:
         password = ""; del password; gc.collect()
     db.add_edge(edge_id, name, ipv4, int(port_raw), result["ssh_user"], result["fingerprint"], "bootstrapping")
-    message(f"Edge {edge_id} cadastrada em bootstrapping.\nConexão por chave Ed25519 validada; ainda não publicada no DNS.")
+    if db.tenants(enabled_only=True):
+        deployment = queue_deployment(db)
+        message(
+            f"Edge {edge_id} cadastrada em bootstrapping.\n"
+            "Conexão por chave Ed25519 validada.\n\n"
+            f"Provisionamento enfileirado: {deployment['deployment_id']}\n"
+            f"Release: {deployment['release_id']}\n"
+            "O orquestrador aplicará preflight, runtime, TLS e health em série.\n"
+            "A edge só deve entrar no DNS após os gates de mídia e failover."
+        )
+    else:
+        message(
+            f"Edge {edge_id} cadastrada em bootstrapping.\n"
+            "Conexão por chave Ed25519 validada.\n\n"
+            "Nenhum tenant habilitado: cadastre o tenant antes do deployment."
+        )
 
 
 def edge_action(db: Database, state: str) -> None:
