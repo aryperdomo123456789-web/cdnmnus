@@ -663,6 +663,23 @@ evidências operacionais que fechem os gates críticos:
 - [RFC 9199](https://www.rfc-editor.org/info/rfc9199/): impacto de TTL em cache, resiliência e seleção CDN.
 - [RFC 8767](https://www.rfc-editor.org/info/rfc8767/): possibilidade de resolvedores servirem DNS stale em falhas.
 
+### 3.8 Publicação DNS verificada em 28/08/2026
+
+`cdn.phpd77.com` responde publicamente com três registros A, em modo
+DNS-only: `143.14.168.111`, `143.14.168.168` e `143.14.168.170`. Cada endereço
+retornou `HTTP 200` em `/edge-health` usando o hostname canônico e TLS por
+`--resolve`. Isso comprova alcance e saúde instantânea, mas registros A
+constituem apenas round-robin DNS: não garantem retry por sessão nem retirada
+automática após falha.
+
+No plano de controle local, apenas `lb011` (`143.14.168.168`) e `lb02`
+(`143.14.168.170`) estão cadastradas, ambas em `bootstrapping`; o endereço
+`143.14.168.111` ainda precisa ser cadastrado e promovido para `ready`. A tela
+`DNS & Failover` recalcula a matriz desejada, mas não altera o provedor DNS
+externo. Para declarar failover automático de produção, ainda é necessário um
+controlador/LB com health checks, remoção/restauração e estado de token
+compartilhado ou stateless entre as edges.
+
 ## Conclusão
 
 A base agora possui um segundo data plane funcional em homologação: o XUI real
