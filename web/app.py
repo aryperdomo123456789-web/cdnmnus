@@ -166,7 +166,14 @@ class Handler(BaseHTTPRequestHandler):
                 DB.set_edge_state(parts[2], "draining"); DB.sync_dns_matrix(); self._json(200, {"state": "draining"}); return
             if len(parts) == 4 and parts[:2] == ["api", "edges"] and parts[3] == "health":
                 edge = DB.edge(parts[2]); context = ssl._create_unverified_context()
-                request = urllib.request.Request(f"https://{edge['ipv4']}/edge-health", headers={"Host": "edge-health.local"})
+                tenants = DB.tenants(enabled_only=True)
+                if not tenants:
+                    raise ValueError("nenhum tenant habilitado para health check")
+                health_host = tenants[0]["canonical_host"]
+                request = urllib.request.Request(
+                    f"https://{edge['ipv4']}/edge-health",
+                    headers={"Host": health_host, "User-Agent": "cdnmnus-health-controller/1.0"},
+                )
                 try:
                     with urllib.request.urlopen(request, timeout=5, context=context) as response: status = response.status
                 except Exception: status = 503
