@@ -95,12 +95,13 @@ Edge e não a página Debian “Welcome to nginx!”. `/edge-health` retorna HTT
 nas três pontas. A edge `143.14.168.111` permaneceu no runtime legado para
 preservar a entrega atual e ainda precisa de migração controlada.
 
-Na edge legada 111, a tela é servida pelo arquivo local
-`/var/www/mago-edge/index.html`. O rodapé foi atualizado nessa cópia para
-`2026 @MagoPD todos os direitos reservados.`. Para edges gerenciadas pela
-release, o texto deve ser alterado na string de `location = /` em
-`core/render_tenants.py` e publicado por nova release; não editar o vhost
-remoto diretamente.
+Na edge legada 111, a tela era servida pelo arquivo local
+`/var/www/mago-edge/index.html` e mantinha o layout detalhado legado. Esse
+arquivo foi alinhado ao mesmo layout simples emitido pelo renderizador, com o
+rodapé `2026 @MagoPD todos os direitos reservados.`. As rotas de mídia não
+foram alteradas. Para edges gerenciadas pela release, o texto continua sendo
+controlado pela string de `location = /` em `core/render_tenants.py` e deve ser
+publicado por nova release.
 
 ## Correção do deployment e resultado da reaplicação
 
@@ -123,15 +124,18 @@ execução original falhou antes da reaplicação manual; ele não deve ser edit
 para aparentar sucesso. O worker precisa receber uma nova fila/release após o
 diagnóstico para registrar um deployment `succeeded` de forma auditável.
 
-A edge `143.14.168.111` não foi sobrescrita: ela permanece no runtime legado de
-controle e continua entregando a tela “Mago Edge Infrastructure”. A migração da
-111 para o runtime novo deve ocorrer em janela controlada, com drain e rollback.
+A edge `143.14.168.111` não foi sobrescrita no runtime de mídia: ela permanece
+no runtime legado de controle, mas sua página pública agora usa o mesmo modelo
+simples das edges gerenciadas. A migração integral da 111 para o runtime novo
+continua devendo ocorrer em janela controlada, com drain e rollback.
 
 ## Regra para a tela pública
 
-O vhost novo possui `/edge-health`, `/movie/`, `/series/` e `/hls/`. A rota raiz
-`/` em 168/170 ainda encaminha para a origem, que devolve “Welcome to nginx!”.
-Para padronizar a tela pública, a próxima release deve instalar uma localização
-exata `location = /` com a página estática Mago Edge, antes da localização
-genérica `/`. Isso deve ser feito no renderizador/release e validado com
-`nginx -t`; não editar o arquivo remoto manualmente.
+O vhost novo possui `/edge-health`, `/movie/`, `/series/` e `/hls/`. A rota
+raiz `location = /` em 168/170 é gerada por `core/render_tenants.py`; na 111 a
+mesma resposta é servida pelo arquivo legado local. As três pontas agora
+apresentam uma única tela pública simples. A validação de configuração deve
+ser feita com `nginx -t` antes de qualquer reload; no host de controle atual o
+teste ainda acusa um upstream externo não resolvível em
+`/etc/nginx/conf.d/99-cdnmnus-upstream.conf`, falha preexistente e independente
+da troca visual.
