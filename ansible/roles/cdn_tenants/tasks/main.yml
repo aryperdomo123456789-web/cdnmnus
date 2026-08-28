@@ -8,6 +8,54 @@
     mode: '0640'
     directory_mode: '0750'
 
+- name: Verificar certificado TLS disponível no control node
+  ansible.builtin.stat:
+    path: "{{ tls_fullchain_source }}"
+  delegate_to: localhost
+  become: false
+  register: tls_fullchain_local
+
+- name: Verificar chave TLS disponível no control node
+  ansible.builtin.stat:
+    path: "{{ tls_privkey_source }}"
+  delegate_to: localhost
+  become: false
+  register: tls_privkey_local
+
+- name: Impedir ativação sem certificado TLS válido
+  ansible.builtin.assert:
+    that:
+      - tls_fullchain_local.stat.exists
+      - tls_privkey_local.stat.exists
+    fail_msg: >-
+      Certificado TLS ausente no control node. Distribua/renove o certificado
+      antes de provisionar esta edge.
+    quiet: true
+
+- name: Criar diretório TLS da edge
+  ansible.builtin.file:
+    path: "/etc/letsencrypt/live/{{ canonical_health_host }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Distribuir fullchain TLS por canal Ansible protegido
+  ansible.builtin.copy:
+    src: "{{ tls_fullchain_source }}"
+    dest: "/etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Distribuir chave privada TLS por canal Ansible protegido
+  ansible.builtin.copy:
+    src: "{{ tls_privkey_source }}"
+    dest: "/etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem"
+    owner: root
+    group: root
+    mode: '0600'
+
 - name: Ler manifesto instalado
   ansible.builtin.slurp:
     src: "/opt/cdnmnus/releases/{{ release_id }}/manifest.json"
