@@ -178,6 +178,39 @@ class Database:
             db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tenant_id,))
         return {"tenant_id": tenant_id, "hostname": hostname, "tls_status": "pending"}
 
+    def add_upstream(self, tenant_id: str, kind: str, host: str, port: int = 80) -> dict[str, Any]:
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        if kind not in {"lb", "vod"}:
+            raise ValueError("tipo de upstream inválido")
+        host = normalize_hostname(host)
+        port = normalize_port(port)
+        upstream_id = f"{kind}-{tenant_id}-{uuid.uuid4().hex[:10]}"
+        with self.transaction(immediate=True) as db:
+            if db.execute("SELECT 1 FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone() is None:
+                raise ValueError("tenant não encontrado")
+            db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,?)",
+                       (upstream_id, tenant_id, kind, host, port))
+            db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tenant_id,))
+        return next(item for item in self.tenant(tenant_id)["upstreams"] if item["id"] == upstream_id)
+
+    def update_upstream(self, upstream_id: str, host: str, port: int = 80) -> dict[str, Any]:
+        host = normalize_hostname(host); port = normalize_port(port)
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT tenant_id,kind FROM tenant_upstreams WHERE id=?", (upstream_id,)).fetchone()
+            if row is None or row["kind"] not in {"lb", "vod"}:
+                raise ValueError("upstream editável não encontrado")
+            db.execute("UPDATE tenant_upstreams SET host=?,port=? WHERE id=?", (host, port, upstream_id))
+            db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (row["tenant_id"],))
+        return next(item for item in self.tenant(row["tenant_id"])["upstreams"] if item["id"] == upstream_id)
+
+    def delete_upstream(self, upstream_id: str) -> None:
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT tenant_id,kind FROM tenant_upstreams WHERE id=?", (upstream_id,)).fetchone()
+            if row is None or row["kind"] not in {"lb", "vod"}:
+                raise ValueError("upstream removível não encontrado")
+            db.execute("DELETE FROM tenant_upstreams WHERE id=?", (upstream_id,))
+            db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (row["tenant_id"],))
+
     def add_edge(self, edge_id: str, name: str, ipv4: str, ssh_port: int,
                  ssh_user: str, fingerprint: str, state: str = "pending") -> dict[str, Any]:
         import ipaddress
