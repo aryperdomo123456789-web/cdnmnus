@@ -9,6 +9,7 @@ User=cdn-admin
 Group=cdn-admin
 WorkingDirectory=/opt/cdnmnus
 EnvironmentFile=/etc/cdnmnus/admin.env
+Environment="CDNMNUS_ADMIN_DB=/var/lib/cdnmnus-admin/admin.db"
 Environment="PYTHONPATH=/opt/cdnmnus"
 Environment="PATH=/opt/cdnmnus/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 Environment="ANSIBLE_CONFIG=/opt/cdnmnus/ansible/ansible.cfg"
