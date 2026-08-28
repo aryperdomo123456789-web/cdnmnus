@@ -204,6 +204,12 @@ server {{
 
 {dynamic_vod_location}
 
+    location = / {{
+        default_type text/html;
+        add_header Cache-Control "no-store" always;
+        return 200 "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='robots' content='noindex'><title>Mago Edge Infrastructure</title><style>body{{margin:0;background:#080d18;color:#eef4ff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}}main{{max-width:760px;padding:48px}}h1{{font-size:48px;margin:0 0 12px}}p{{color:#94a3b8}}.ok{{color:#22c55e}}</style></head><body><main><p class='ok'>● Edge node active</p><h1>Content delivery at the edge.</h1><p>Protected edge network. Direct access is restricted by edge security policies.</p></main></body></html>";
+    }}
+
     location / {{
         proxy_pass http://origin_{tid};
         proxy_set_header Host $host;
