@@ -308,6 +308,25 @@ não é falha de autenticação da playlist. A correção segura é cadastrar so
 os domínios finais realmente pertencentes ao serviço VOD e redistribuir a
 configuração, mantendo o token temporário fora do cliente.
 
+### 3.12 Gateway VOD dinâmico validado
+
+O broker passou a seguir redirects VOD posteriores ao primeiro fornecedor,
+imitando o comportamento do navegador, mas somente para requisições que
+começam em `/movie/` ou `/series/`, com até cinco saltos e validação de endereço
+IP público. O destino final é convertido em rota Nginx `internal`; o cliente
+nunca recebe o `Location` nem o token interno.
+
+Teste após a ativação:
+
+```text
+filme real da playlist:  HTTP 206, Range 0-1023, 1024 bytes
+série real da playlist: HTTP 206, Range 0-1023, 1024 bytes
+```
+
+Um ID de série inexistente retornou `503`, enquanto outro ID válido da mesma
+playlist retornou `206`, distinguindo indisponibilidade do fornecedor de erro
+do gateway.
+
 Em 28/08/2026 foi validado o fluxo real do player contra a URL autorizada
 informada pelo operador, comparando o acesso público `cdn.phpd77.com` com a
 origem `38.46.223.77:80`.
