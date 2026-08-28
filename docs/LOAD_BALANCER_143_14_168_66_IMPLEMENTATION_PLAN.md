@@ -191,3 +191,120 @@ garantido**, e não Load Balancer de produção.
 - `docs/TOKEN_LIFECYCLE_AND_ORIGIN_SHIELD.md`
 - `docs/PRODUCTION_SECURITY_AND_CAPACITY.md`
 - `docs/CDN_5_OF_10_EXECUTION_AUDIT.md`
+
+## 11. Cadastro e preparação da VPS `143.14.168.66`
+
+### 11.1 Pré-requisitos antes de tocar no DNS
+
+O cadastro deve ocorrer no menu SSH do plano de controle, sem publicar o IP
+imediatamente:
+
+```bash
+TERM=xterm-256color mago-cdn
+```
+
+Fluxo obrigatório:
+
+1. **Gerenciar Edges → Adicionar** (até existir o cadastro específico de LB).
+2. Informar ID técnico, nome `lb-primary`, IP `143.14.168.66`, porta e usuário
+   SSH.
+3. Ler o fingerprint pelo menu e comparar com o console do provedor.
+4. Confirmar a senha apenas para o bootstrap; ela não é persistida.
+5. Executar preflight: Ubuntu suportado, NTP, disco, RAM, conectividade às
+   edges e acesso administrativo.
+6. Manter o estado `bootstrapping` até o perfil LB ser aplicado e validado.
+
+O cadastro genérico de edge não transforma a máquina em Load Balancer. A função
+LB só deve ser habilitada pelo playbook dedicado `deploy-load-balancer.yml`.
+
+### 11.2 Seção de cadastro dedicada (a implementar)
+
+O menu deverá ganhar **Load Balancers → Cadastrar LB** com os campos:
+
+```text
+ID técnico: lb-primary
+Nome: LB principal
+IPv4: 143.14.168.66
+Porta SSH: 22
+Usuário operacional: cdn-deploy
+Fingerprint Ed25519: leitura + confirmação manual
+Modo: active | standby
+Backends: edge-main, edge-168, edge-170
+```
+
+Ao confirmar, o painel deve criar um registro de LB separado do registro de
+edge, executar somente preflight e gerar um deployment de perfil `load_balancer`.
+Não deve alterar DNS, firewall das edges ou produção até os gates de aceite.
+
+## 12. Estado unificado e recuperação quando o LB cair
+
+Não sincronizar `/var/lib/cdnmnus-admin/admin.db` por `scp`, `rsync` ou cópia de
+arquivo enquanto o serviço estiver ativo. SQLite WAL é local e uma cópia pode
+ficar inconsistente ou perder alterações.
+
+### 12.1 Fonte autoritativa recomendada
+
+Para múltiplos menus SSH e promoção offline, adotar uma destas opções:
+
+1. **PostgreSQL externo/HA** como banco autoritativo do control plane; ou
+2. um repositório de estado versionado, assinado e criptografado, com snapshots
+   transacionais aplicados localmente.
+
+O SQLite atual deve continuar como cache/local fallback, mas não como banco
+primário compartilhado entre VPS. Segredos (tokens, chaves privadas e senhas)
+ficam fora do estado versionado, em secret store ou arquivos root-only.
+
+Cada LB/edge deve manter um pacote de recuperação local, atualizado após cada
+release aprovada, contendo somente configuração segura, manifesto, hashes,
+inventário, certificados permitidos e o último snapshot do estado não secreto.
+
+### 12.2 Promoção via SSH
+
+O menu em qualquer edge deverá oferecer **Recuperação → Promover esta máquina
+para LB** somente depois de confirmar:
+
+- quorum/lock de promoção, para impedir dois LBs ativos;
+- snapshot de estado com assinatura válida;
+- acesso aos três backends ou ao subconjunto disponível;
+- certificado e chave de assinatura de token presentes;
+- capacidade mínima e portas livres.
+
+O fluxo é:
+
+```text
+adquirir lock/quorum
+drain da função atual
+instalar role load_balancer
+restaurar snapshot aprovado
+renderizar backends
+validar configuração e health checks
+ativar serviço LB
+publicar o novo endpoint por DNS/API
+registrar evento e monitorar
+```
+
+Se a máquina promovida era uma edge, ela deixa de servir mídia durante a
+operação. O rollback executa o caminho inverso e só reinclui a edge após health
+e release válidos.
+
+### 12.3 Limite importante
+
+Sem um mecanismo de quorum/lock e sem estado autoritativo, “entrar por SSH em
+qualquer edge e promover” pode criar split-brain: dois LBs anunciando o mesmo
+serviço, configurações divergentes e tokens incompatíveis. A opção de promoção
+deve permanecer bloqueada até esses componentes existirem e serem testados.
+
+## 13. Ordem de implementação para tornar a promoção real
+
+1. Criar migração do modelo para `load_balancers` e `lb_backends`.
+2. Criar role/playbook `load_balancer` idempotente.
+3. Criar controlador de health, lock/quorum e eventos de promoção.
+4. Criar pacote de recuperação e rotina de backup/restore testável.
+5. Adicionar **Cadastrar LB** e **Promover esta máquina para LB** ao menu SSH.
+6. Preparar `143.14.168.66` em homologação e validar failover.
+7. Preparar uma segunda máquina standby.
+8. Só depois alterar `cdn.phpd77.com` para o LB.
+
+Até a conclusão desses itens, o comportamento correto é manter o menu de
+promoção indisponível e usar o runbook manual, evitando uma falsa sensação de
+alta disponibilidade.
