@@ -247,6 +247,30 @@ Esse comando é uma ferramenta de evidência, não um atestado automático de
 sucesso: `Range` só fecha o gate VOD quando o recurso escolhido for realmente
 um objeto VOD e responder `206`.
 
+### 3.10 Estado DNS verificado em 28/08/2026
+
+Foi feita consulta externa aos apontamentos informados:
+
+```text
+cdn.phpd77.com       A -> 143.14.168.111
+teste.phpd77.com     A -> 143.14.168.111, 143.14.168.168, 143.14.168.170
+```
+
+Por ser um registro explícito, `cdn.phpd77.com` não herda os três endereços do
+wildcard. Os health checks diretos pelo mesmo hostname retornaram:
+
+```text
+143.14.168.111 -> HTTPS /edge-health 200
+143.14.168.168 -> HTTPS /edge-health 200
+143.14.168.170 -> sem resposta (HTTP 000)
+```
+
+O wildcard, portanto, já serve como laboratório de distribuição, mas não deve
+ser usado como failover. A edge `170` precisa ser provisionada e validada antes
+de qualquer publicação. A adição de múltiplos A em `cdn.phpd77.com` só é segura
+depois de fechar o estado compartilhado/renovação de tokens entre as edges;
+caso contrário, uma sessão iniciada em uma edge pode falhar ao trocar de edge.
+
 Em 28/08/2026 foi validado o fluxo real do player contra a URL autorizada
 informada pelo operador, comparando o acesso público `cdn.phpd77.com` com a
 origem `38.46.223.77:80`.
