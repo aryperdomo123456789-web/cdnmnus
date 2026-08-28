@@ -1,0 +1,9 @@
+# Artefatos locais de validação
+*.log
+*.tmp
+.rendered-nginx.conf
+
+# Ambientes e caches
+.env
+.cache/
+.DS_Store
