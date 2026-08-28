@@ -12,7 +12,11 @@ pass() { printf '[smoke] %s\n' "$*"; }
 
 cd "$ROOT_DIR"
 bash -n install.sh scripts/sysctl_tuning.sh scripts/firewall_hardening.sh
+python3 -m py_compile panel/panel.py panel/token_broker.py
 pass 'sintaxe Bash aprovada'
+
+python3 tests/token_broker_test.py >/dev/null
+pass 'token broker: parser, singleflight, refresh e allowlist aprovados'
 
 dry_output="$(./install.sh --dry-run --yes --main-ip 127.0.0.1 --main-port 3000 --domain exemplo.com)"
 grep -q 'Dry-run concluído' <<< "$dry_output" || fail 'dry-run do instalador não concluiu'

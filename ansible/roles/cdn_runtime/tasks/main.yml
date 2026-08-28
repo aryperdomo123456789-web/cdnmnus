@@ -1,0 +1,33 @@
+---
+- name: Instalar resolver seguro legado usado pelo broker multi-tenant
+  ansible.builtin.copy:
+    src: "{{ project_root }}/panel/token_broker.py"
+    dest: /opt/cdnmnus/runtime/token_broker.py
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Reiniciar brokers dos tenants
+
+- name: Instalar broker multi-tenant
+  ansible.builtin.copy:
+    src: "{{ project_root }}/panel/multi_tenant_broker.py"
+    dest: /opt/cdnmnus/runtime/multi_tenant_broker.py
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Reiniciar brokers dos tenants
+
+- name: Instalar unit de broker por tenant
+  ansible.builtin.copy:
+    src: "{{ project_root }}/panel/cdnmnus-tenant-broker@.service"
+    dest: /etc/systemd/system/cdnmnus-tenant-broker@.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: broker_unit
+  notify: Reiniciar brokers dos tenants
+
+- name: Recarregar systemd após mudança da unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: broker_unit.changed

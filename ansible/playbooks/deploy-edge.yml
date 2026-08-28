@@ -1,0 +1,52 @@
+---
+- name: Sincronizar release cdnmnus serialmente
+  hosts: cdn_edges
+  become: true
+  serial: 1
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  vars:
+    edge_release_root: /opt/cdnmnus/releases
+  tasks:
+    - name: Validar variáveis controladas
+      ansible.builtin.assert:
+        that:
+          - release_id is match('^[0-9]{14}-[a-f0-9]{8}$')
+          - config_digest is match('^[a-f0-9]{64}$')
+          - release_source.startswith('/')
+        quiet: true
+
+    - name: Criar diretório da release
+      ansible.builtin.file:
+        path: "{{ edge_release_root }}/{{ release_id }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copiar artefato aprovado
+      ansible.builtin.copy:
+        src: "{{ release_source }}/"
+        dest: "{{ edge_release_root }}/{{ release_id }}/"
+        owner: root
+        group: root
+        mode: preserve
+
+    - name: Ler manifesto remoto
+      ansible.builtin.slurp:
+        src: "{{ edge_release_root }}/{{ release_id }}/manifest.json"
+      register: remote_manifest
+
+    - name: Validar digest declarado
+      ansible.builtin.assert:
+        that:
+          - (remote_manifest.content | b64decode | from_json).config_digest == config_digest
+        quiet: true
+
+    - name: Registrar release sincronizada
+      ansible.builtin.copy:
+        content: "{{ release_id }} {{ config_digest }}\n"
+        dest: "{{ edge_release_root }}/{{ release_id }}/SYNCED"
+        owner: root
+        group: root
+        mode: '0644'

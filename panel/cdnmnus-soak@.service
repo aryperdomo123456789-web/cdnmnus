@@ -1,0 +1,14 @@
+[Unit]
+Description=cdnmnus authorized six-hour soak (%i)
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/cdnmnus-panel/soak_test.py --url-file /etc/cdnmnus/soak-%i.url --duration 21600 --result /var/lib/cdnmnus/soak-%i.json
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/cdnmnus
+ReadWritePaths=/var/lib/cdnmnus
+UMask=0077

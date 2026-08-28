@@ -2,6 +2,71 @@
 
 Procedimentos completos de instalacao, atualizacao, acesso SSH e rollback: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
+Padrao especializado de producao, ocultacao de origem, capacidade e criterios objetivos para nota 10/10: [docs/PRODUCTION_SECURITY_AND_CAPACITY.md](docs/PRODUCTION_SECURITY_AND_CAPACITY.md).
+
+Relatorio da auditoria real de playlists, vazamento, cache frio e concorrencia ate 500 clientes: [docs/CAPACITY_AUDIT_2026-08-28.md](docs/CAPACITY_AUDIT_2026-08-28.md).
+
+Arquitetura para expiracao, renovacao transparente de tokens, fail-closed e origin shield: [docs/TOKEN_LIFECYCLE_AND_ORIGIN_SHIELD.md](docs/TOKEN_LIFECYCLE_AND_ORIGIN_SHIELD.md).
+
+Execução segura do painel, worker, SQLite WAL, venv e Ansible:
+[docs/ADMIN_CONTROL_PLANE_EXECUTION.md](docs/ADMIN_CONTROL_PLANE_EXECUTION.md).
+
+Auditoria real da edge/XUI e plano objetivo para atingir nível 5/10:
+[docs/CDN_5_OF_10_EXECUTION_AUDIT.md](docs/CDN_5_OF_10_EXECUTION_AUDIT.md).
+
+## Administração multi-edge local
+
+O plano administrativo novo fica separado do painel legado e usa SQLite em
+modo WAL. A CLI e o painel compartilham `/etc/cdnmnus/admin.db`:
+
+```bash
+# Terminal interativo
+sudo ./run_admin.sh cli tenant add
+sudo ./run_admin.sh cli edge add
+sudo ./run_admin.sh cli edge list
+sudo ./run_admin.sh cli dns sync
+sudo ./run_admin.sh cli deploy
+
+# Painel em 8080 (senha obrigatória)
+sudo env CDNMNUS_ADMIN_PASSWORD='troque-esta-senha' ./run_admin.sh web
+```
+
+A porta pode ser informada na inicialização (`web --port 8443`), pela variável
+`CDNMNUS_ADMIN_PORT=8443`, pelo comando `cli config web-port 8443` ou na aba
+**Configuração** do navegador. Alterações persistidas pelo painel entram em vigor
+após reiniciar o processo.
+
+Ao expor o bind `0.0.0.0`, use firewall/rede administrativa e TLS:
+
+```bash
+sudo env CDNMNUS_ADMIN_PASSWORD='troque-esta-senha' \
+  ./run_admin.sh web --port 8443 \
+  --tls-cert /etc/cdnmnus/admin.crt --tls-key /etc/cdnmnus/admin.key
+```
+
+O bootstrap solicita a senha inicial via `getpass`/formulário mascarado, confirma
+a host key Ed25519 e só conserva a chave privada operacional depois de validar
+uma conexão `BatchMode` como `cdn-deploy`. A senha inicial não é gravada no
+SQLite, inventário, argumento de processo ou arquivo.
+
+O botão de deploy do navegador apenas cria o job. O worker desacoplado deve estar
+ativo para consumir a fila e chamar Ansible:
+
+```bash
+sudo -u cdn-admin python3 orchestrator/worker.py
+# ou instale web/cdnmnus-admin.service e
+# orchestrator/cdnmnus-orchestrator.service no systemd
+```
+
+O menu visual unificado via SSH é aberto com:
+
+```bash
+TERM=xterm-256color mago-cdn
+```
+
+Ele reúne dashboard, edges, bootstrap SSH, tenants, CNAMEs, DNS, deployments,
+serviços, acesso web e uma entrada para o menu legado.
+
 Instalador CLI modular para transformar uma instalação limpa do Ubuntu em um **reverse proxy Nginx enxuto, previsível e adaptativo**. O projeto usa Bash, Nginx nativo do sistema e utilitários padrão do Ubuntu, sem framework ou dependência pesada.
 
 > O objetivo é entregar uma base eficiente para VPS pequenas, sem sacrificar limites de conexão e arquivos em máquinas maiores. Não existe “número mágico” que sirva para todo hardware: o instalador calcula o perfil a partir de CPU e memória detectadas.
@@ -152,6 +217,10 @@ A configuração de proxy repassa `X-Real-IP`, `X-Forwarded-For` e `X-Forwarded-
 Este repositório é distribuído conforme a licença presente em `LICENSE`, quando adicionada pelo mantenedor.
 
 ## Referências
+
+- [Implementação multi-edge com Ansible desacoplado](docs/ANSIBLE_MULTI_EDGE_IMPLEMENTATION.md)
+- [Guia de código da Opção B: atual → multi-edge](docs/MULTI_EDGE_OPTION_B_CODE_GUIDE.md)
+- [Multi-edge e failover](docs/MULTI_EDGE_FAILOVER.md)
 
 [1]: https://nginx.org/en/docs/ Nginx Documentation — documentação oficial do Nginx.
 

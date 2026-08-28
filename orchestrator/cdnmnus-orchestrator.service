@@ -1,0 +1,32 @@
+[Unit]
+Description=cdnmnus Ansible deployment worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cdn-admin
+Group=cdn-admin
+WorkingDirectory=/opt/cdnmnus
+EnvironmentFile=/etc/cdnmnus/admin.env
+Environment="PYTHONPATH=/opt/cdnmnus"
+Environment="PATH=/opt/cdnmnus/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+ExecStart=/opt/cdnmnus/venv/bin/python3 /opt/cdnmnus/orchestrator/worker.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

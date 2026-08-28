@@ -1,0 +1,6 @@
+---
+- name: Reiniciar brokers dos tenants
+  ansible.builtin.systemd_service:
+    name: "cdnmnus-tenant-broker@{{ item }}.service"
+    state: restarted
+  loop: "{{ tenant_ids | default([]) }}"

@@ -1,0 +1,2 @@
+"""CLI administrativa cdnmnus."""
+

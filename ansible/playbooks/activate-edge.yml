@@ -1,0 +1,13 @@
+---
+- name: Instalar e ativar runtime multi-tenant serialmente
+  hosts: cdn_edges
+  become: true
+  serial: 1
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  vars:
+    project_root: /opt/cdnmnus
+  roles:
+    - edge_base
+    - cdn_runtime
+    - cdn_tenants

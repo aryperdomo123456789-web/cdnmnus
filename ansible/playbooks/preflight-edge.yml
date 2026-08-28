@@ -1,0 +1,44 @@
+---
+- name: Auditar pré-requisitos das edges sem alterar estado
+  hosts: cdn_edges
+  become: false
+  gather_facts: true
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Validar sistema operacional e capacidade mínima
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_major_version | int >= 20
+          - ansible_memtotal_mb | int >= 1024
+          - ansible_processor_vcpus | int >= 1
+        quiet: true
+
+    - name: Conferir acesso TCP à origem XUI
+      ansible.builtin.wait_for:
+        host: "{{ xui_origin_host }}"
+        port: "{{ xui_origin_port | default(80) }}"
+        timeout: 8
+        state: started
+      when: xui_origin_host is defined
+
+    - name: Conferir acesso TCP aos load balancers autorizados
+      ansible.builtin.wait_for:
+        host: "{{ item }}"
+        port: 80
+        timeout: 8
+        state: started
+      loop: "{{ xui_load_balancers | default([]) }}"
+
+    - name: Coletar serviços atualmente disponíveis
+      ansible.builtin.service_facts:
+
+    - name: Exibir resumo não sensível
+      ansible.builtin.debug:
+        msg:
+          edge: "{{ inventory_hostname }}"
+          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          vcpu: "{{ ansible_processor_vcpus }}"
+          memory_mb: "{{ ansible_memtotal_mb }}"
+          nginx: "{{ ansible_facts.services.get('nginx.service', {}).get('state', 'not-installed') }}"

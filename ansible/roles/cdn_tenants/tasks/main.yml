@@ -1,0 +1,142 @@
+---
+- name: Instalar release aprovada
+  ansible.builtin.copy:
+    src: "{{ release_source }}/"
+    dest: "/opt/cdnmnus/releases/{{ release_id }}/"
+    owner: root
+    group: www-data
+    mode: '0640'
+    directory_mode: '0750'
+
+- name: Ler manifesto instalado
+  ansible.builtin.slurp:
+    src: "/opt/cdnmnus/releases/{{ release_id }}/manifest.json"
+  register: installed_manifest
+
+- name: Conferir digest da release
+  ansible.builtin.assert:
+    that:
+      - (installed_manifest.content | b64decode | from_json).config_digest == config_digest
+    quiet: true
+
+- name: Descobrir release ativa anterior
+  ansible.builtin.command: readlink -f /opt/cdnmnus/current
+  register: previous_release
+  changed_when: false
+  failed_when: false
+
+- name: Ativar e validar release com rollback
+  block:
+    - name: Apontar current para release candidata
+      ansible.builtin.file:
+        src: "/opt/cdnmnus/releases/{{ release_id }}"
+        dest: /opt/cdnmnus/current
+        state: link
+        force: true
+      register: active_release_link
+
+    - name: Criar diretórios de cache por tenant
+      ansible.builtin.file:
+        path: "/var/cache/nginx/cdnmnus/{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0750'
+      loop: "{{ tenant_ids }}"
+
+    - name: Remover site padrão da distribuição
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      register: nginx_default_removed
+
+    - name: Instalar servidor padrão fail-closed
+      ansible.builtin.copy:
+        content: |
+          server_tokens off;
+          server {
+              listen 80 default_server;
+              server_name _;
+              return 421;
+          }
+          server {
+              listen 443 ssl default_server;
+              server_name _;
+              ssl_certificate /etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem;
+              return 421;
+          }
+        dest: /etc/nginx/conf.d/97-cdnmnus-default.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: nginx_fail_closed
+
+    - name: Instalar include do runtime multi-tenant
+      ansible.builtin.copy:
+        content: |
+          include /opt/cdnmnus/current/nginx/tenants/*.conf;
+        dest: /etc/nginx/conf.d/98-cdnmnus-tenants.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: tenant_nginx_include
+
+    - name: Habilitar brokers dos tenants
+      ansible.builtin.systemd_service:
+        name: "cdnmnus-tenant-broker@{{ item }}.service"
+        enabled: true
+        state: started
+      loop: "{{ tenant_ids }}"
+
+    - name: Validar Nginx candidato
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Habilitar Nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: true
+        state: started
+
+    - name: Recarregar Nginx quando a configuração mudou
+      ansible.builtin.systemd_service:
+        name: nginx
+        state: reloaded
+      when: active_release_link.changed or tenant_nginx_include.changed
+            or nginx_default_removed.changed or nginx_fail_closed.changed
+
+    - name: Validar health local por tenant
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/edge-health"
+        headers:
+          Host: "{{ item.host }}"
+        validate_certs: false
+        status_code: 200
+      loop: "{{ tenant_health_hosts }}"
+      register: tenant_health
+      retries: 5
+      delay: 2
+      until: tenant_health.status == 200
+  rescue:
+    - name: Restaurar release anterior
+      ansible.builtin.file:
+        src: "{{ previous_release.stdout }}"
+        dest: /opt/cdnmnus/current
+        state: link
+        force: true
+      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+
+    - name: Remover include quando não havia release anterior
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d/98-cdnmnus-tenants.conf
+        state: absent
+      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+
+    - name: Validar e recarregar configuração restaurada
+      ansible.builtin.shell: nginx -t && systemctl reload nginx
+      changed_when: true
+
+    - name: Interromper rollout após rollback
+      ansible.builtin.fail:
+        msg: Edge restaurada após falha de ativação/health

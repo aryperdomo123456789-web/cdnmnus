@@ -14,3 +14,10 @@
 # Python cache
 __pycache__/
 *.py[cod]
+venv/
+.venv/
+
+# Estado/segredos do plano administrativo
+admin.db*
+ansible/inventories/production/hosts.yml
+releases/

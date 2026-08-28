@@ -1,0 +1,15 @@
+[Unit]
+Description=cdnmnus sanitized local metrics collector
+After=nginx.service cdnmnus-token-broker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/cdnmnus-panel/sanitized_monitor.py
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cdnmnus
+UMask=0022

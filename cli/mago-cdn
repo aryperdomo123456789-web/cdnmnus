@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export PYTHONPATH="/opt/cdnmnus${PYTHONPATH:+:${PYTHONPATH}}"
+export CDNMNUS_ADMIN_DB="${CDNMNUS_ADMIN_DB:-/var/lib/cdnmnus-admin/admin.db}"
+exec /opt/cdnmnus/venv/bin/python3 /opt/cdnmnus/cli/mago_cdn.py "$@"

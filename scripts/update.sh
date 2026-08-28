@@ -45,25 +45,39 @@ fi
 
 git fetch --prune origin "$REF"
 git merge --ff-only "origin/$REF"
-[[ -f install.sh && -f panel/panel.py && -f panel/cdnmnus-panel.service ]] || die 'arquivos essenciais ausentes'
+[[ -f install.sh && -f panel/panel.py && -f panel/token_broker.py && -f scripts/sanitized_monitor.py && -f scripts/soak_test.py && -f scripts/media_validation.py && -f panel/cdnmnus-panel.service && -f panel/cdnmnus-token-broker.service && -f panel/cdnmnus-monitor.service && -f panel/cdnmnus-monitor.timer && -f panel/cdnmnus-soak@.service ]] || die 'arquivos essenciais ausentes'
 
 stamp="$(date +%Y%m%d%H%M%S)"
 backup="$BACKUP_ROOT/$stamp"
 install -d -m 700 "$backup"
-for path in /etc/nginx/nginx.conf /etc/nginx/conf.d/99-cdnmnus-upstream.conf /etc/cdnmnus/panel.env /etc/cdnmnus/panel.db; do
+for path in /etc/nginx/nginx.conf /etc/nginx/conf.d/99-cdnmnus-upstream.conf /etc/cdnmnus/panel.env /etc/cdnmnus/panel.db /etc/cdnmnus/token-broker.json; do
   [[ -e "$path" ]] && cp -a "$path" "$backup/"
 done
 log "backup criado em $backup"
 
 python3 -m py_compile panel/panel.py
+python3 -m py_compile panel/token_broker.py
 bash -n install.sh scripts/*.sh tests/*.sh
 install -d -m 755 "$PANEL_DIR"
+install -d -o www-data -g www-data -m 0750 /var/cache/nginx/cdnmnus-hls
 install -m 0755 panel/panel.py "$PANEL_DIR/panel.py"
+install -m 0755 panel/token_broker.py "$PANEL_DIR/token_broker.py"
+install -m 0755 scripts/sanitized_monitor.py "$PANEL_DIR/sanitized_monitor.py"
+install -m 0755 scripts/soak_test.py "$PANEL_DIR/soak_test.py"
+install -m 0755 scripts/media_validation.py "$PANEL_DIR/media_validation.py"
 install -m 0644 panel/cdnmnus-panel.service /etc/systemd/system/cdnmnus-panel.service
+install -m 0644 panel/cdnmnus-token-broker.service /etc/systemd/system/cdnmnus-token-broker.service
+install -m 0644 panel/cdnmnus-monitor.service /etc/systemd/system/cdnmnus-monitor.service
+install -m 0644 panel/cdnmnus-monitor.timer /etc/systemd/system/cdnmnus-monitor.timer
+install -m 0644 panel/cdnmnus-soak@.service /etc/systemd/system/cdnmnus-soak@.service
 systemctl daemon-reload
 systemctl restart cdnmnus-panel.service
+systemctl enable cdnmnus-token-broker.service >/dev/null 2>&1 || true
+systemctl enable --now cdnmnus-monitor.timer
+[[ -f /etc/cdnmnus/token-broker.json ]] && systemctl restart cdnmnus-token-broker.service
 nginx -t
 systemctl reload nginx
 systemctl is-active --quiet nginx || die 'Nginx nao ficou ativo'
 systemctl is-active --quiet cdnmnus-panel.service || die 'painel nao ficou ativo'
+[[ ! -f /etc/cdnmnus/token-broker.json ]] || systemctl is-active --quiet cdnmnus-token-broker.service || die 'token broker nao ficou ativo'
 log 'atualizacao concluida; Nginx e painel ativos'

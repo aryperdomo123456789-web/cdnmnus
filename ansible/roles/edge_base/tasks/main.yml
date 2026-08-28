@@ -1,0 +1,77 @@
+---
+- name: Instalar pacotes base da edge
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - ufw
+      - ca-certificates
+      - curl
+      - python3
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Instalar limites do runtime CDN
+  ansible.builtin.copy:
+    content: |
+      www-data soft nofile 131072
+      www-data hard nofile 131072
+      cdn-deploy soft nofile 65536
+      cdn-deploy hard nofile 65536
+    dest: /etc/security/limits.d/90-cdnmnus.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Instalar sysctl conservador da edge
+  ansible.builtin.copy:
+    content: |
+      net.core.somaxconn = 16384
+      net.ipv4.tcp_max_syn_backlog = 16384
+      net.ipv4.tcp_tw_reuse = 1
+      fs.file-max = 1048576
+      vm.swappiness = 10
+    dest: /etc/sysctl.d/90-cdnmnus.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: edge_sysctl
+
+- name: Aplicar sysctl quando alterado
+  ansible.builtin.command: sysctl --system
+  when: edge_sysctl.changed
+  changed_when: true
+
+- name: Definir política UFW de entrada
+  ansible.builtin.command: ufw default deny incoming
+  changed_when: false
+
+- name: Definir política UFW de saída
+  ansible.builtin.command: ufw default allow outgoing
+  changed_when: false
+
+- name: Liberar portas públicas e SSH
+  ansible.builtin.command: "ufw allow {{ item.port }}/tcp comment '{{ item.comment }}'"
+  loop:
+    - {port: 22, comment: cdnmnus-ssh}
+    - {port: 80, comment: cdnmnus-http}
+    - {port: 443, comment: cdnmnus-https}
+  register: ufw_rules
+  changed_when: "'Skipping adding existing rule' not in ufw_rules.stdout"
+
+- name: Habilitar UFW
+  ansible.builtin.command: ufw --force enable
+  register: ufw_enable
+  changed_when: "'Firewall is active' not in ufw_enable.stdout"
+
+- name: Garantir diretórios da CDN
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/cdnmnus/runtime, owner: root, group: root, mode: '0755'}
+    - {path: /opt/cdnmnus/releases, owner: root, group: root, mode: '0755'}
+    - {path: /var/cache/nginx/cdnmnus, owner: www-data, group: www-data, mode: '0750'}

@@ -1,0 +1,43 @@
+[Unit]
+Description=cdnmnus local HLS token broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+ExecStart=/usr/bin/python3 /opt/cdnmnus-panel/token_broker.py
+Restart=on-failure
+RestartSec=2
+EnvironmentFile=-/etc/cdnmnus/token-broker.env
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=true
+RestrictRealtime=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+TasksMax=512
+MemoryMax=512M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -288,7 +288,8 @@ fetch_asset() {
 
 prepare_assets() {
   local local_ok=0
-  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/scripts/sysctl_tuning.sh" && -f "$SCRIPT_DIR/scripts/firewall_hardening.sh" && -f "$SCRIPT_DIR/nginx/nginx.conf" ]]; then
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/scripts/sysctl_tuning.sh" && -f "$SCRIPT_DIR/scripts/firewall_hardening.sh" && -f "$SCRIPT_DIR/nginx/nginx.conf" ]] \
+     && { (( WITH_PANEL == 0 )) || [[ -f "$SCRIPT_DIR/panel/panel.py" && -f "$SCRIPT_DIR/panel/token_broker.py" && -f "$SCRIPT_DIR/scripts/sanitized_monitor.py" && -f "$SCRIPT_DIR/scripts/soak_test.py" && -f "$SCRIPT_DIR/scripts/media_validation.py" && -f "$SCRIPT_DIR/panel/cdnmnus-panel.service" && -f "$SCRIPT_DIR/panel/cdnmnus-token-broker.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-soak@.service" ]]; }; then
     local_ok=1
   fi
 
@@ -298,12 +299,24 @@ prepare_assets() {
   fi
 
   TMP_DIR="$(mktemp -d -t cdnmnus.XXXXXX)"
-  mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/nginx"
+  mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/nginx" "$TMP_DIR/panel"
   local raw_base="${CDN_INSTALLER_RAW_BASE:-$RAW_BASE_DEFAULT}"
   log "Modo remoto detectado; baixando os módulos oficiais do repositório."
   fetch_asset "$raw_base/scripts/sysctl_tuning.sh" "$TMP_DIR/scripts/sysctl_tuning.sh"
   fetch_asset "$raw_base/scripts/firewall_hardening.sh" "$TMP_DIR/scripts/firewall_hardening.sh"
   fetch_asset "$raw_base/nginx/nginx.conf" "$TMP_DIR/nginx/nginx.conf"
+  if (( WITH_PANEL == 1 )); then
+    fetch_asset "$raw_base/panel/panel.py" "$TMP_DIR/panel/panel.py"
+    fetch_asset "$raw_base/panel/token_broker.py" "$TMP_DIR/panel/token_broker.py"
+    fetch_asset "$raw_base/panel/cdnmnus-panel.service" "$TMP_DIR/panel/cdnmnus-panel.service"
+    fetch_asset "$raw_base/panel/cdnmnus-token-broker.service" "$TMP_DIR/panel/cdnmnus-token-broker.service"
+    fetch_asset "$raw_base/panel/cdnmnus-monitor.service" "$TMP_DIR/panel/cdnmnus-monitor.service"
+    fetch_asset "$raw_base/panel/cdnmnus-monitor.timer" "$TMP_DIR/panel/cdnmnus-monitor.timer"
+    fetch_asset "$raw_base/panel/cdnmnus-soak@.service" "$TMP_DIR/panel/cdnmnus-soak@.service"
+    fetch_asset "$raw_base/scripts/sanitized_monitor.py" "$TMP_DIR/scripts/sanitized_monitor.py"
+    fetch_asset "$raw_base/scripts/soak_test.py" "$TMP_DIR/scripts/soak_test.py"
+    fetch_asset "$raw_base/scripts/media_validation.py" "$TMP_DIR/scripts/media_validation.py"
+  fi
   chmod 0755 "$TMP_DIR/scripts/sysctl_tuning.sh" "$TMP_DIR/scripts/firewall_hardening.sh"
   ASSET_DIR="$TMP_DIR"
 }
@@ -365,18 +378,27 @@ install_panel() {
     log "dry-run: painel seria instalado em 127.0.0.1:9090."
     return
   fi
-  [[ -f "$ASSET_DIR/panel/panel.py" && -f "$ASSET_DIR/panel/cdnmnus-panel.service" ]] || die "Arquivos do painel não encontrados."
+  [[ -f "$ASSET_DIR/panel/panel.py" && -f "$ASSET_DIR/panel/token_broker.py" && -f "$ASSET_DIR/panel/cdnmnus-panel.service" && -f "$ASSET_DIR/panel/cdnmnus-token-broker.service" ]] || die "Arquivos do painel/token broker não encontrados."
   local panel_dir="/opt/cdnmnus-panel"
   local env_file="/etc/cdnmnus/panel.env"
   local password="${PANEL_PASSWORD}"
   install -d -m 0755 "$panel_dir" /etc/cdnmnus
+  install -d -o www-data -g www-data -m 0750 /var/cache/nginx/cdnmnus-hls
   if [[ -z "$password" ]]; then
     password="$(openssl rand -base64 32 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 32)"
     [[ -n "$password" ]] || die "Não foi possível gerar a senha inicial do painel."
     log "Senha inicial gerada; guarde-a agora: usuário=$PANEL_USER senha=$password"
   fi
   install -m 0755 "$ASSET_DIR/panel/panel.py" "$panel_dir/panel.py"
+  install -m 0755 "$ASSET_DIR/panel/token_broker.py" "$panel_dir/token_broker.py"
+  install -m 0755 "$ASSET_DIR/scripts/sanitized_monitor.py" "$panel_dir/sanitized_monitor.py"
+  install -m 0755 "$ASSET_DIR/scripts/soak_test.py" "$panel_dir/soak_test.py"
+  install -m 0755 "$ASSET_DIR/scripts/media_validation.py" "$panel_dir/media_validation.py"
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-panel.service" /etc/systemd/system/cdnmnus-panel.service
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-token-broker.service" /etc/systemd/system/cdnmnus-token-broker.service
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-monitor.service" /etc/systemd/system/cdnmnus-monitor.service
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-monitor.timer" /etc/systemd/system/cdnmnus-monitor.timer
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-soak@.service" /etc/systemd/system/cdnmnus-soak@.service
   umask 077
   printf 'CDNMNUS_PANEL_USER=%s\nCDNMNUS_PANEL_PASSWORD=%s\n' "$PANEL_USER" "$password" > "$env_file"
   chmod 0600 "$env_file"
@@ -392,6 +414,11 @@ install_panel() {
   chmod 0600 "$env_file"
   systemctl daemon-reload
   systemctl restart cdnmnus-panel.service
+  systemctl enable cdnmnus-token-broker.service >/dev/null 2>&1 || true
+  systemctl enable --now cdnmnus-monitor.timer
+  if [[ -f /etc/cdnmnus/token-broker.json ]]; then
+    systemctl restart cdnmnus-token-broker.service
+  fi
   log "Painel instalado em 127.0.0.1:9090; banco root-only em /etc/cdnmnus/panel.db."
 }
 
