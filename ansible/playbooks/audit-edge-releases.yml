@@ -1,0 +1,63 @@
+---
+- name: Detectar drift de release e health sem alterar a edge
+  hosts: cdn_edges
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: false
+  tasks:
+    - name: Ler estado declarado da edge
+      ansible.builtin.slurp:
+        src: /opt/cdnmnus/current.json
+      register: edge_current_raw
+
+    - name: Interpretar estado declarado
+      ansible.builtin.set_fact:
+        edge_current: "{{ edge_current_raw.content | b64decode | from_json }}"
+
+    - name: Validar formato do estado declarado
+      ansible.builtin.assert:
+        that:
+          - edge_current.schema_version == 1
+          - edge_current.release_id is match('^[0-9]{14}-[a-f0-9]{8}$')
+          - edge_current.config_digest is match('^[a-f0-9]{64}$')
+          - edge_current.status == 'healthy'
+        quiet: true
+
+    - name: Resolver release realmente ativa
+      ansible.builtin.command: readlink -f /opt/cdnmnus/current
+      register: active_release
+      changed_when: false
+
+    - name: Detectar divergência entre symlink e estado declarado
+      ansible.builtin.assert:
+        that:
+          - active_release.stdout == '/opt/cdnmnus/releases/' + edge_current.release_id
+        quiet: true
+
+    - name: Recalcular todos os hashes da release ativa
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/cdnmnus-verify-release
+          - /opt/cdnmnus/current
+          - "{{ edge_current.release_id }}"
+          - "{{ edge_current.config_digest }}"
+      changed_when: false
+
+    - name: Validar health local de cada tenant
+      ansible.builtin.uri:
+        url: https://127.0.0.1/edge-health
+        headers:
+          Host: "{{ item.host }}"
+        validate_certs: false
+        status_code: 200
+      loop: "{{ tenant_health_hosts }}"
+      changed_when: false
+
+    - name: Expor identidade comprovada da edge
+      ansible.builtin.debug:
+        msg:
+          edge: "{{ inventory_hostname }}"
+          release_id: "{{ edge_current.release_id }}"
+          config_digest: "{{ edge_current.config_digest }}"
+          health: healthy

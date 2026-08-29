@@ -154,3 +154,68 @@ No host atual: **8,5/10 em segurança/engenharia da CDN**. HTTPS obrigatório,
 broker VOD fail-closed e monitoramento já estão ativos. 10/10 ainda depende de
 ACL na origem, uma segunda edge física/DNS failover e soak real de seis horas.
 Esses itens não podem ser substituídos por uma afirmação de marketing.
+
+## Continuação: compatibilidade XCIPTV/IBO Player e saúde do host
+
+As duas playlists autorizadas foram baixadas para `/dev/shm`, com modo `0600`,
+e analisadas sem registrar credenciais ou URLs de mídia. Cada arquivo tinha
+80.260.772 bytes, cabeçalho `#EXTM3U`, 318.342 URLs válidas, 1.148 entradas HLS
+`.m3u8` e 317.194 entradas VOD `.mp4`. A versão CDN continha exclusivamente
+HTTPS e a versão da origem exclusivamente HTTP. Os corpos diferem apenas no
+endpoint publicado, portanto seus hashes não devem ser comparados como prova de
+divergência de catálogo.
+
+Foram simulados os padrões HTTP relevantes de XCIPTV e IBO Player com dois
+User-Agents distintos: download de playlist, abertura de manifesto live e GET
+VOD com `Range: bytes=0-65535`. Em ambos os perfis, a CDN respondeu `200` no
+manifesto e `206` com exatamente 65.536 bytes no VOD. Não houve `Location` nem
+`X-Accel-Redirect` público e o host final permaneceu no domínio CDN. A origem
+direta também respondeu `200/206`, mas seguiu redirects para hosts de entrega;
+essa diferença comprova a função de ocultação exercida pela CDN.
+
+O login Xtream Codes usado por esses aplicativos também foi reproduzido em
+`player_api.php`. CDN e origem responderam `200`, JSON válido, seções
+`user_info`/`server_info` e autenticação ativa nos dois User-Agents. Nenhum
+conteúdo dessa resposta, especialmente identidade, limites e endpoints, foi
+persistido no relatório.
+
+Esses testes reproduzem o comportamento HTTP do player, não a renderização de
+vídeo/áudio em firmware proprietário. Certificação visual, troca automática de
+canal, EPG, codecs específicos e soak de seis horas ainda exigem os aplicativos
+reais em dispositivos reais.
+
+### Defeitos adicionais confirmados e corrigidos
+
+1. `PinnedHTTPSConnection` no novo relay VOD tentava discar usando um atributo
+   de porta ausente nessa hierarquia. Qualquer redirect VOD HTTPS falharia antes
+   de abrir o socket. O relay agora preserva uma porta pinada explícita; os sete
+   testes do componente, incluindo IP pinning, SNI, Range e bloqueio SSRF,
+   passaram.
+2. O plano de controle abria conexões SQLite por meio do context manager nativo,
+   que faz commit/rollback mas não fecha a conexão. Os caminhos internos de
+   inicialização, leitura e escrita, assim como a compilação de releases, agora
+   usam fechamento explícito.
+
+### Incidente de armazenamento encontrado durante a auditoria
+
+Os testes integrados do painel ficaram bloqueados mesmo contra bancos SQLite
+novos em `/tmp`. A reprodução mínima (`PRAGMA journal_mode=WAL`) também ficou
+em espera no kernel. A inspeção mostrou o thread `jbd2/vda1-8` em estado `D`,
+`wait_on_buffer`, com tempo acumulado superior a um dia, e processos de teste em
+`jbd2_log_wait_commit`. Isso caracteriza degradação do dispositivo/filesystem
+da VPS, não um lock SQLite criado pelo teste.
+
+Nginx, painel, broker e plano de controle continuavam ativos, e `nginx -t`
+passou, mas operações persistentes do painel não podem ser consideradas fluidas
+enquanto o journal estiver nesse estado. Não foi feito reboot ou reparo de
+filesystem automaticamente, pois essas são ações operacionais de risco. Antes
+de promover o relay ou publicar outra edge:
+
+1. criar snapshot/backup no provedor;
+2. verificar métricas e eventos do disco virtual no provedor;
+3. agendar reboot controlado e, se o problema persistir, `fsck` offline;
+4. repetir toda a suíte SQLite/HTTP e medir latência de commit;
+5. somente então gerar, promover e testar uma nova release.
+
+Os arquivos temporários de playlist devem ser removidos de `/dev/shm` ao fim da
+sessão; eles nunca devem ser copiados para Git, logs ou documentos.

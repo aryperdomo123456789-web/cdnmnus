@@ -205,7 +205,12 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
                 return f"/__cdnmnus_vod_{vod_hosts.index(host)}" + path
             # Host final descoberto pelo redirect, equivalente ao navegador.
             # O prefixo é internal no Nginx; o cliente nunca pode fornecê-lo.
-            return f"/__cdnmnus_dynamic_vod/{host}{path}"
+            # X-Accel-Redirect passa novamente pelo parser de URI do Nginx.
+            # Preserve escapes percentuais do fornecedor por duas camadas;
+            # sem isso, caminhos assinados com %xx são decodificados antes do
+            # proxy e o storage final responde 400 por assinatura divergente.
+            internal_path = path.replace("%", "%25")
+            return f"/__cdnmnus_dynamic_vod/{host}{internal_path}"
         if response.status not in (HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT):
             raise LookupError(f"vod_status_{response.status}")
         parsed = urlsplit(location)

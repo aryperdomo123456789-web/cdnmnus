@@ -65,6 +65,28 @@ rendered = mod.render_include({
 })
 assert "map $request_uri $cdnmnus_skip_hls_cache" in rendered
 assert rendered.count("proxy_no_cache $cdnmnus_skip_hls_cache;") == 5
+assert "servicedovod.lat" in rendered
+assert "upstream cdnmnus_vod_0" in rendered
+assert "fragrant-harbor-683b.2dzncf9igp3u.workers.dev" not in rendered
+assert "cdnmnus_vod_storage" not in rendered
+
+mod.VOD_SEED_HOSTS = "vod-a.test, vod-b.test, vod-a.test"
+assert mod.configured_vod_hosts() == ["vod-a.test", "vod-b.test"]
+custom_vod = mod.render_include({
+    "upstream_host": "origin.test", "resolved_addresses": ["203.0.113.10"],
+    "upstream_port": 80, "public_host": "cdn.test", "load_balancers": [],
+})
+assert "server vod-a.test:80" in custom_vod
+assert "server vod-b.test:80" in custom_vod
+assert "location ^~ /__cdnmnus_vod_1/" in custom_vod
+
+mod.VOD_SEED_HOSTS = "https://invalid.test"
+try:
+    mod.configured_vod_hosts()
+except ValueError:
+    pass
+else:
+    raise AssertionError("VOD seed with a URL scheme must be rejected")
 server.shutdown()
 tmp.cleanup()
 print("panel SQLite/auth/password/config checks: OK")

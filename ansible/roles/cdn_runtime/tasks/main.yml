@@ -1,33 +1,20 @@
 ---
-- name: Instalar resolver seguro legado usado pelo broker multi-tenant
-  ansible.builtin.copy:
-    src: "{{ project_root }}/panel/token_broker.py"
-    dest: /opt/cdnmnus/runtime/token_broker.py
-    owner: root
-    group: root
-    mode: '0755'
-  notify: Reiniciar brokers dos tenants
+# Nada é copiado para um diretório mutável de runtime. Os serviços executam
+# pela release apontada em /opt/cdnmnus/current, tornando o código rollbackável.
+- name: Conferir artefatos obrigatórios do runtime candidato
+  ansible.builtin.stat:
+    path: "/opt/cdnmnus/releases/{{ release_id }}/{{ item }}"
+  loop:
+    - runtime/token_broker.py
+    - runtime/multi_tenant_broker.py
+    - runtime/vod_relay.py
+    - runtime/cdnmnus-tenant-broker@.service
+    - runtime/cdnmnus-vod-relay@.service
+  register: candidate_runtime_artifacts
 
-- name: Instalar broker multi-tenant
-  ansible.builtin.copy:
-    src: "{{ project_root }}/panel/multi_tenant_broker.py"
-    dest: /opt/cdnmnus/runtime/multi_tenant_broker.py
-    owner: root
-    group: root
-    mode: '0755'
-  notify: Reiniciar brokers dos tenants
-
-- name: Instalar unit de broker por tenant
-  ansible.builtin.copy:
-    src: "{{ project_root }}/panel/cdnmnus-tenant-broker@.service"
-    dest: /etc/systemd/system/cdnmnus-tenant-broker@.service
-    owner: root
-    group: root
-    mode: '0644'
-  register: broker_unit
-  notify: Reiniciar brokers dos tenants
-
-- name: Recarregar systemd após mudança da unit
-  ansible.builtin.systemd_service:
-    daemon_reload: true
-  when: broker_unit.changed
+- name: Impedir ativação de runtime incompleto
+  ansible.builtin.assert:
+    that:
+      - candidate_runtime_artifacts.results | map(attribute='stat.exists') | min
+      - candidate_runtime_artifacts.results | map(attribute='stat.isreg') | min
+    quiet: true

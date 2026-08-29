@@ -70,3 +70,35 @@ impacto. Nunca publicar um segundo A record como se isso fosse failover.
 Rollback é feito para o último `release_id` aprovado no próprio host, com
 `nginx -t`, reload e cinco health checks. Se o digest divergir, a edge permanece
 fora do pool até nova sincronização.
+
+O runtime Python também pertence à release: as units executam
+`/opt/cdnmnus/current/runtime/...`. Não copie binários para um diretório mutável
+paralelo. Durante a ativação, o playbook preserva as units instaladas, troca o
+symlink atomicamente e só publica `current.json` depois de `nginx -t` e dos
+health checks. Em falha, restaura symlink, units e conjunto de serviços da
+release anterior antes de recarregar o Nginx.
+
+## Gates obrigatórios para convergência das três edges
+
+Antes de sincronizar ou ativar produção:
+
+1. o inventário efetivo deve conter `143.14.168.111`, `143.14.168.168` e
+   `143.14.168.170`, cada uma com chave e host key próprios;
+2. somente nós em estado `ready` ou `draining` entram no inventário gerado;
+   `pending` e `bootstrapping` são recusados pelo fluxo de release;
+3. o artefato local e o staging remoto devem passar
+   `cdnmnus-verify-release` com o mesmo `release_id` e `config_digest`;
+4. o rollout permanece serial e para na primeira falha;
+5. após ativar, `current`, `current.json`, manifesto recalculado e health de
+   todos os tenants devem concordar em cada edge;
+6. execute `audit-edge-releases.yml` e compare a mesma identidade nas três
+   máquinas antes de alterar DNS ou pool;
+7. o rollback precisa ser ensaiado no canário, incluindo código Python, units,
+   brokers, relays, symlink, Nginx e `current.json`.
+
+Em 28/08/2026, o inventário versionado continha somente `lb011`
+(`143.14.168.168`). Ele não prova convergência de três edges e não deve ser
+completado por suposição: IDs, fingerprints, chaves e estado `ready` precisam
+ser validados no control node. O incidente ext4/jbd2 também impede aprovação
+de uma release criada no disco local; testes de integridade foram isolados em
+`/dev/shm`, sem deploy remoto.

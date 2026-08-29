@@ -166,3 +166,26 @@ O cadastro não altera uma edge imediatamente. Depois de salvar, use **DNS &
 Failover → Deploy serial**, valide `nginx -t` e confirme a reprodução antes de
 remover qualquer configuração legada. A implementação está no commit `57684b6`
 da branch `production/2026-08-28`.
+
+## Próxima arquitetura especializada
+
+O desenho completo para tratar as fontes cadastradas como seeds, seguir com
+segurança fornecedores posteriores desconhecidos e impedir vazamento ao player
+está documentado em
+[VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md).
+
+O documento diferencia explicitamente a prova de conceito existente da solução
+alvo com pinning DNS completo, HTTPS/SNI, streaming, isolamento por tenant,
+testes de SSRF, migração e rollback.
+
+## Atualização de implementação — 28/08/2026
+
+Uma revalidação posterior a esta coleta encontrou duas fontes VOD já cadastradas
+para `xui-principal`; ambas resolveram somente para endereços públicos e aceitaram
+TCP/80. A afirmação histórica `vod: nenhum` acima descreve a coleta anterior e
+não deve ser usada como estado atual do banco.
+
+O Workers legado inexistente foi removido do gerador e do candidato ativo. Após
+backup recuperável, `nginx -t`, health antes/depois e comparação dos blocos
+HLS/live, o Nginx foi recarregado com sucesso. O novo relay privado permanece em
+canário isolado e ainda não substitui `/movie/` ou `/series/` no tráfego público.

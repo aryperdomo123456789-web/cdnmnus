@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -64,7 +64,7 @@ class Database:
             db.close()
 
     def initialize(self) -> None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
             db.executescript("""
@@ -142,7 +142,7 @@ class Database:
             return
 
     def rows(self, sql: str, params: Sequence[object] = ()) -> list[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             return [dict(row) for row in db.execute(sql, params).fetchall()]
 
     def add_tenant(self, tenant_id: str, name: str, canonical_host: str,
@@ -222,7 +222,7 @@ class Database:
             raise ValueError("estado de edge inválido")
         if not name.strip() or not ssh_user.strip():
             raise ValueError("nome e usuário SSH são obrigatórios")
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("""INSERT INTO edges(id,name,ipv4,ssh_port,ssh_user,host_key_sha256,state)
                         VALUES(?,?,?,?,?,?,?)""",
                        (edge_id, name.strip(), str(address), normalize_port(ssh_port),
@@ -232,7 +232,7 @@ class Database:
     def set_edge_state(self, edge_id: str, state: str, version: str | None = None) -> None:
         if state not in EDGE_STATES:
             raise ValueError("estado de edge inválido")
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("""UPDATE edges SET state=?, deployed_version=COALESCE(?,deployed_version),
                         updated_at=CURRENT_TIMESTAMP WHERE id=?""", (state, version, edge_id))
             if db.total_changes != 1:
@@ -281,7 +281,7 @@ class Database:
         return json.loads(rows[0]["value"]) if rows else default
 
     def set_setting(self, key: str, value: Any) -> None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("""INSERT INTO settings(key,value) VALUES(?,?)
                         ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP""",
                        (key, json.dumps(value, ensure_ascii=False)))

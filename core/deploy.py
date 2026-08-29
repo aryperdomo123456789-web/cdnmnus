@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import closing
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +15,13 @@ from typing import Any
 
 from core.db import Database
 from core.render_tenants import broker_snapshot, render_all
+
+
+def _release_digest(files: dict[str, str]) -> str:
+    """Digest canônico da lista fechada de artefatos da release."""
+    return hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-admin/releases") -> dict[str, Any]:
@@ -31,6 +39,7 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
         temp = Path(temp_name)
         (temp / "nginx/tenants").mkdir(parents=True)
         (temp / "broker").mkdir()
+        (temp / "runtime").mkdir()
         hashes: dict[str, str] = {}
         for relative, item in rendered.items():
             destination = temp / "nginx" / relative
@@ -41,11 +50,28 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
         (temp / "broker/tenants.json").write_text(snapshot, encoding="utf-8")
         os.chmod(temp / "broker/tenants.json", 0o640)
         hashes["broker/tenants.json"] = hashlib.sha256(snapshot.encode()).hexdigest()
-        digest = hashlib.sha256(json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        project_root = Path(__file__).resolve().parents[1]
+        runtime_sources = {
+            "runtime/token_broker.py": project_root / "panel/token_broker.py",
+            "runtime/multi_tenant_broker.py": project_root / "panel/multi_tenant_broker.py",
+            "runtime/vod_relay.py": project_root / "panel/vod_relay.py",
+            "runtime/cdnmnus-tenant-broker@.service": project_root / "panel/cdnmnus-tenant-broker@.service",
+            "runtime/cdnmnus-vod-relay@.service": project_root / "panel/cdnmnus-vod-relay@.service",
+        }
+        for relative, source in runtime_sources.items():
+            if not source.is_file():
+                raise FileNotFoundError(f"artefato obrigatório do runtime ausente: {source}")
+            content = source.read_bytes()
+            destination = temp / relative
+            destination.write_bytes(content)
+            os.chmod(destination, 0o640)
+            hashes[relative] = hashlib.sha256(content).hexdigest()
+        digest = _release_digest(hashes)
         manifest = {"schema_version": 1, "release_id": release_id, "generation": generation,
                     "tenant_count": len(tenants), "config_digest": digest, "files": hashes}
         (temp / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.chmod(temp / "manifest.json", 0o640)
+        # Mesmo filesystem: a release só se torna visível depois de completa.
         os.rename(temp, final)
     return {**manifest, "artifact_path": str(final)}
 
@@ -54,7 +80,9 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh") -> dict[s
     hosts: dict[str, Any] = {}
     known_hosts = Path(key_dir) / "known_hosts"
     for edge in db.edges():
-        if edge["state"] not in ("pending", "bootstrapping", "ready", "draining"):
+        # Provisionamento/bootstrap têm fluxo próprio. Uma release aprovada só
+        # pode alcançar nós que já passaram por esses gates.
+        if edge["state"] not in ("ready", "draining"):
             continue
         key_path = Path(key_dir) / f"{edge['id']}.ed25519"
         hosts[edge["id"]] = {
@@ -72,7 +100,7 @@ def queue_deployment(db: Database,
                      release_root: str | Path = "/var/lib/cdnmnus-admin/releases") -> dict[str, Any]:
     release = build_release(db, release_root)
     deployment_id = "dep-" + uuid.uuid4().hex
-    with db.connect() as conn:
+    with closing(db.connect()) as conn, conn:
         conn.execute("INSERT INTO deployments(id,state,release_id,config_digest,artifact_path) VALUES(?,?,?,?,?)",
                      (deployment_id, "queued", release["release_id"], release["config_digest"], release["artifact_path"]))
     return {"deployment_id": deployment_id, "state": "queued", **release}
@@ -94,7 +122,7 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
                    key_dir: str | Path = "/etc/cdnmnus/ssh") -> dict[str, Any]:
     if shutil.which("ansible-playbook") is None:
         error = "ansible-playbook não está instalado; instale ansible-core no control node"
-        with db.connect() as conn:
+        with closing(db.connect()) as conn, conn:
             conn.execute("UPDATE deployments SET state='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?", (error, deployment["id"]))
         raise RuntimeError(error)
     generated_inventory: Path | None = None
@@ -117,6 +145,8 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
                    "config_digest": deployment["config_digest"],
                    "canonical_health_host": tenants[0]["canonical_host"],
                    "tenant_ids": [item["id"] for item in tenants],
+                   "vod_tenant_ids": [item["id"] for item in tenants
+                                      if any(upstream["kind"] == "vod" for upstream in item.get("upstreams", []))],
                    "tenant_health_hosts": [{"host": item["canonical_host"]} for item in tenants],
                })]
     try:
@@ -133,7 +163,7 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         # diagnóstico operacional no painel/journal.
         tail = "\n".join((result.stderr or result.stdout).splitlines()[-8:])
         error = "ansible-playbook falhou; resumo sanitizado:\n" + tail[:2000]
-    with db.connect() as conn:
+    with closing(db.connect()) as conn, conn:
         conn.execute("UPDATE deployments SET state=?,error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",
                      (state, error, deployment["id"]))
     if result.returncode != 0:

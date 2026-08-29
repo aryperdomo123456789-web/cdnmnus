@@ -63,58 +63,35 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
     }}'''
         for index, _ in enumerate(cfg["lb"])
     )
-    vod_upstreams = "\n\n".join(
-        f"upstream vod_{tid}_{index} {{\n    server {_nginx(item['host'])}:{item['port']};\n    keepalive 16;\n}}"
-        for index, item in enumerate(cfg["vod"])
-    )
-    vod_locations = "\n\n".join(
-        f'''    location ^~ /__cdnmnus_{tid}_vod_{index}/ {{
-        internal;
-        proxy_pass http://vod_{tid}_{index}/;
-        # Cache curto para abertura VOD; Range passa direto para preservar
-        # semântica de seek e não persistir respostas parciais.
-        proxy_cache cache_{tid};
-        proxy_cache_methods GET HEAD;
-        proxy_cache_key "{tid}|vod{index}|$uri";
-        proxy_cache_bypass $http_range;
-        proxy_no_cache $http_range;
-        proxy_cache_valid 200 30s;
-        proxy_cache_lock on;
-        proxy_cache_lock_timeout 2s;
-        proxy_cache_lock_age 5s;
-        proxy_buffering on;
-        slice 1m;
-        proxy_set_header Range $slice_range;
-        proxy_read_timeout 300s;
+    vod_relay_upstream = f'''upstream vod_relay_{tid} {{
+    server unix:/run/cdnmnus/vod-relay-{tid}.sock;
+    keepalive 32;
+}}
+''' if cfg["vod"] else ""
+    vod_public_location = f'''    location ~ ^/(?:movie|series)/ {{
+        limit_except GET HEAD {{ deny all; }}
+        proxy_pass http://vod_relay_{tid};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header Range $http_range;
+        proxy_set_header If-Range $http_if_range;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
         proxy_hide_header Location;
         proxy_hide_header Server;
-    }}'''
-        for index, _ in enumerate(cfg["vod"])
-    )
-    dynamic_vod_location = f'''    # Redirect final dinâmico, somente emitido pelo broker após validação.
-    resolver 1.1.1.1 1.0.0.1 valid=60s ipv6=off;
-    location ~ ^/__cdnmnus_{tid}_dynamic_vod/([A-Za-z0-9.-]+)(/.+)$ {{
-        internal;
-        set $vod_dynamic_host $1;
-        set $vod_dynamic_path $2;
-        proxy_pass http://$vod_dynamic_host$vod_dynamic_path$is_args$args;
-        proxy_set_header Host $vod_dynamic_host;
-        proxy_cache cache_{tid};
-        proxy_cache_methods GET HEAD;
-        proxy_cache_key "{tid}|dynamic-vod|$vod_dynamic_host|$vod_dynamic_path";
-        proxy_cache_bypass $http_range;
-        proxy_no_cache $http_range;
-        proxy_cache_valid 200 30s;
-        proxy_cache_lock on;
-        proxy_cache_lock_timeout 2s;
-        proxy_cache_lock_age 5s;
-        proxy_buffering on;
-        slice 1m;
-        proxy_set_header Range $slice_range;
-        proxy_read_timeout 300s;
-        proxy_hide_header Location;
-        proxy_hide_header Server;
-    }}'''
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header X-Accel-Redirect;
+        proxy_hide_header Set-Cookie;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 30s;
+        access_log off;
+    }}''' if cfg["vod"] else '''    location ~ ^/(?:movie|series)/ {
+        access_log off;
+        return 503;
+    }'''
     content = f'''# Gerado pelo cdnmnus; não editar manualmente.
 proxy_cache_path /var/cache/nginx/cdnmnus/{tid} levels=1:2
     keys_zone=cache_{tid}:32m max_size=2g inactive=2m use_temp_path=off;
@@ -129,9 +106,9 @@ upstream broker_{tid} {{
     keepalive 16;
 }}
 
-{lb_upstreams}
+{vod_relay_upstream}
 
-{vod_upstreams}
+{lb_upstreams}
 
 server {{
     listen 80;
@@ -172,14 +149,7 @@ server {{
         proxy_pass_request_body off;
     }}
 
-    location ~ ^/(?:movie|series)/ {{
-        proxy_pass http://broker_{tid};
-        proxy_set_header X-CDN-Tenant {tid};
-        proxy_set_header X-CDN-Public-Host $host;
-        proxy_set_header X-Broker-Action resolve-vod;
-        proxy_set_header X-Original-URI $request_uri;
-        proxy_pass_request_body off;
-    }}
+{vod_public_location}
 
     location ^~ /__cdnmnus_{tid}_origin/ {{
         internal;
@@ -199,10 +169,6 @@ server {{
     }}
 
 {lb_locations}
-
-{vod_locations}
-
-{dynamic_vod_location}
 
     location = / {{
         default_type text/html;
@@ -243,5 +209,13 @@ def broker_snapshot(tenants: Iterable[dict[str, Any]], generation: int) -> str:
         result["tenants"][cfg["id"]] = {
             "public_hosts": cfg["hosts"], "origin": cfg["origin"],
             "load_balancers": cfg["lb"], "vod_hosts": cfg["vod"], "ttl_seconds": 15,
+            "vod_policy": {
+                "seeds": [{"host": item["host"],
+                           "schemes": ["https"] if item["port"] == 443 else ["http"],
+                           "ports": [item["port"]]} for item in cfg["vod"]],
+                "allow_chain_derived_hosts": True,
+                "derived_host_ports": [80, 443],
+                "max_redirects": 5,
+            },
         }
     return json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"

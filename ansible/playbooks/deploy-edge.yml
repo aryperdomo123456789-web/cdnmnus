@@ -16,32 +16,73 @@
           - release_source.startswith('/')
         quiet: true
 
-    - name: Criar diretório da release
+    - name: Limpar staging de tentativa anterior
       ansible.builtin.file:
-        path: "{{ edge_release_root }}/{{ release_id }}"
+        path: "{{ edge_release_root }}/.incoming-{{ release_id }}"
+        state: absent
+
+    - name: Recriar staging vazio
+      ansible.builtin.file:
+        path: "{{ edge_release_root }}/.incoming-{{ release_id }}"
         state: directory
         owner: root
-        group: root
-        mode: '0755'
+        group: www-data
+        mode: '0750'
 
     - name: Copiar artefato aprovado
       ansible.builtin.copy:
         src: "{{ release_source }}/"
-        dest: "{{ edge_release_root }}/{{ release_id }}/"
+        dest: "{{ edge_release_root }}/.incoming-{{ release_id }}/"
         owner: root
-        group: root
+        group: www-data
         mode: preserve
 
-    - name: Ler manifesto remoto
-      ansible.builtin.slurp:
-        src: "{{ edge_release_root }}/{{ release_id }}/manifest.json"
-      register: remote_manifest
+    - name: Instalar verificador independente de releases
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/verify_release.py"
+        dest: /usr/local/bin/cdnmnus-verify-release
+        owner: root
+        group: root
+        mode: '0755'
 
-    - name: Validar digest declarado
-      ansible.builtin.assert:
-        that:
-          - (remote_manifest.content | b64decode | from_json).config_digest == config_digest
-        quiet: true
+    - name: Recalcular hashes e validar lista fechada do staging
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/cdnmnus-verify-release
+          - "{{ edge_release_root }}/.incoming-{{ release_id }}"
+          - "{{ release_id }}"
+          - "{{ config_digest }}"
+      changed_when: false
+
+    - name: Verificar se a release final já existe
+      ansible.builtin.stat:
+        path: "{{ edge_release_root }}/{{ release_id }}"
+      register: final_release
+
+    - name: Validar release final já existente contra drift
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/cdnmnus-verify-release
+          - "{{ edge_release_root }}/{{ release_id }}"
+          - "{{ release_id }}"
+          - "{{ config_digest }}"
+      changed_when: false
+      when: final_release.stat.exists
+
+    - name: Publicar staging atomicamente
+      ansible.builtin.command:
+        argv:
+          - mv
+          - -T
+          - "{{ edge_release_root }}/.incoming-{{ release_id }}"
+          - "{{ edge_release_root }}/{{ release_id }}"
+      when: not final_release.stat.exists
+
+    - name: Descartar staging após confirmar release idempotente
+      ansible.builtin.file:
+        path: "{{ edge_release_root }}/.incoming-{{ release_id }}"
+        state: absent
+      when: final_release.stat.exists
 
     - name: Registrar release sincronizada
       ansible.builtin.copy:

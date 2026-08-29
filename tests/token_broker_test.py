@@ -115,5 +115,12 @@ mod.http.client.HTTPConnection = VodConnection
 vod_cfg = {**cfg, "vod_hosts": ["vod.test"]}
 assert mod.query_vod("/movie/u/p/99.mp4", vod_cfg) == "/__cdnmnus_vod_0/token/movie"
 
+# O destino dinâmico precisa sobreviver a uma segunda análise de URI pelo
+# X-Accel-Redirect/Nginx sem perder escapes usados em caminhos assinados.
+responses = [(302, "http://vod.test/start"),
+             (302, "http://storage.test/signed/%2Fasset.mp4"), (206, "")]
+assert mod.query_vod("/movie/u/p/100.mp4", vod_cfg) == \
+       "/__cdnmnus_dynamic_vod/storage.test/signed/%252Fasset.mp4"
+
 server.shutdown(); tmp.cleanup()
 print("token broker parser/singleflight/refresh checks: OK")

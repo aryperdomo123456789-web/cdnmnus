@@ -28,6 +28,7 @@ TOKEN_BROKER_CONFIG = Path(os.environ.get("CDNMNUS_TOKEN_CONFIG", "/etc/cdnmnus/
 PUBLIC_HOST = os.environ.get("CDNMNUS_PUBLIC_HOST", "")
 PANEL_USER = os.environ.get("CDNMNUS_PANEL_USER", "admin")
 PANEL_PASSWORD = os.environ.get("CDNMNUS_PANEL_PASSWORD", "")
+VOD_SEED_HOSTS = os.environ.get("CDNMNUS_VOD_SEED_HOSTS", "servicedovod.lat")
 MAX_BODY = 16 * 1024
 PBKDF2_ITERATIONS = 310_000
 HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -132,6 +133,22 @@ def normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
 
 def nginx_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def configured_vod_hosts() -> list[str]:
+    """Return the explicit VOD seeds, rejecting unsafe/ambiguous host values."""
+    hosts: list[str] = []
+    for position, raw_host in enumerate(VOD_SEED_HOSTS.split(","), 1):
+        host = raw_host.strip().lower()
+        if not host:
+            continue
+        if not valid_host(host):
+            raise ValueError(f"CDNMNUS_VOD_SEED_HOSTS contém host inválido na posição {position}")
+        if host not in hosts:
+            hosts.append(host)
+    if not hosts:
+        raise ValueError("CDNMNUS_VOD_SEED_HOSTS deve conter ao menos uma origem VOD")
+    return hosts
 
 
 def db_connect() -> sqlite3.Connection:
@@ -369,9 +386,14 @@ def render_include(config: dict[str, Any]) -> str:
         proxy_cache cdnmnus_hls;
         proxy_cache_bypass $cdnmnus_skip_hls_cache;
         proxy_no_cache $cdnmnus_skip_hls_cache;
-        proxy_cache_key "$scheme|$request_method|$host|$request_uri";
+        proxy_cache_key "$scheme|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_valid 200 6s;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_read_timeout 20s;
         proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
         proxy_intercept_errors on;
         error_page 401 403 404 410 500 502 503 504 = @cdnmnus_refresh;
@@ -386,23 +408,80 @@ def render_include(config: dict[str, Any]) -> str:
         proxy_cache cdnmnus_hls;
         proxy_cache_bypass $cdnmnus_skip_hls_cache;
         proxy_no_cache $cdnmnus_skip_hls_cache;
-        proxy_cache_key "$scheme|$request_method|$host|$request_uri";
+        proxy_cache_key "$scheme|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_valid 200 6s;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_read_timeout 20s;
         proxy_hide_header Server;
         proxy_hide_header Location;
     }}''' for index, _ in enumerate(load_balancers))
-    vod_upstreams = """upstream cdnmnus_vod_gateway {
-    server servicedovod.lat:80 max_fails=2 fail_timeout=5s;
-    keepalive 32;
-}
+    vod_hosts = configured_vod_hosts()
+    vod_upstreams = "\n\n".join(
+        f"upstream cdnmnus_vod_{index} {{\n"
+        f"    server {nginx_escape(vod_host)}:80 max_fails=2 fail_timeout=5s;\n"
+        "    keepalive 32;\n}"
+        for index, vod_host in enumerate(vod_hosts)
+    ) + "\n\n"
+    vod_locations = "\n\n".join(f'''    location ^~ /__cdnmnus_vod_{index}/ {{
+        internal;
+        proxy_pass http://cdnmnus_vod_{index}/;
+        proxy_set_header Host {nginx_escape(vod_host)};
+        proxy_cache cdnmnus_hls;
+        proxy_cache_methods GET HEAD;
+        proxy_cache_key "$host|vod{index}|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
+        proxy_cache_valid 200 30s;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_intercept_errors on;
+        error_page 401 403 404 410 500 502 503 504 = @cdnmnus_refresh;
+        proxy_hide_header Server;
+        proxy_hide_header Location;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }}
 
-upstream cdnmnus_vod_storage {
-    server fragrant-harbor-683b.2dzncf9igp3u.workers.dev:80 max_fails=2 fail_timeout=5s;
-    keepalive 32;
-}
-
-"""
+    location ^~ /__cdnmnus_vod_retry_{index}/ {{
+        internal;
+        proxy_pass http://cdnmnus_vod_{index}/;
+        proxy_set_header Host {nginx_escape(vod_host)};
+        proxy_hide_header Server;
+        proxy_hide_header Location;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }}''' for index, vod_host in enumerate(vod_hosts))
+    dynamic_vod_location = '''    # Redirect VOD final validado pelo broker; rota interna, nunca acessível
+    # diretamente pelo cliente.
+    resolver 1.1.1.1 1.0.0.1 valid=60s ipv6=off;
+    location ~ ^/__cdnmnus_dynamic_vod/([A-Za-z0-9.-]+)(/.+)$ {
+        internal;
+        set $vod_dynamic_host $1;
+        set $vod_dynamic_path $2;
+        proxy_pass http://$vod_dynamic_host$vod_dynamic_path$is_args$args;
+        proxy_set_header Host $vod_dynamic_host;
+        proxy_cache cdnmnus_hls;
+        proxy_cache_methods GET HEAD;
+        proxy_cache_key "$host|dynamic-vod|$vod_dynamic_host|$vod_dynamic_path";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
+        proxy_cache_valid 200 30s;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_buffering on;
+        slice 1m;
+        proxy_set_header Range $slice_range;
+        proxy_read_timeout 300s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+    }
+'''
     fallback_rules = ""
     lb_location = "" if not load_balancers else """
     location ^~ /__cdnmnus_lb__/ {
@@ -413,7 +492,9 @@ upstream cdnmnus_vod_storage {
         proxy_cache_methods GET HEAD;
         proxy_cache_bypass $cdnmnus_skip_hls_cache;
         proxy_no_cache $cdnmnus_skip_hls_cache;
-        proxy_cache_key "$scheme|$request_method|$host|$request_uri";
+        proxy_cache_key "$scheme|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_valid 200 302 30s;
         proxy_cache_lock on;
         proxy_cache_lock_timeout 15s;
@@ -582,9 +663,14 @@ server {{
         proxy_cache cdnmnus_hls;
         proxy_cache_bypass $cdnmnus_skip_hls_cache;
         proxy_no_cache $cdnmnus_skip_hls_cache;
-        proxy_cache_key "$scheme|$request_method|$host|$request_uri";
+        proxy_cache_key "$scheme|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_valid 200 6s;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_read_timeout 20s;
         proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
         proxy_intercept_errors on;
         error_page 401 403 404 410 500 502 503 504 = @cdnmnus_refresh;
@@ -599,9 +685,14 @@ server {{
         proxy_cache cdnmnus_hls;
         proxy_cache_bypass $cdnmnus_skip_hls_cache;
         proxy_no_cache $cdnmnus_skip_hls_cache;
-        proxy_cache_key "$scheme|$request_method|$host|$request_uri";
+        proxy_cache_key "$scheme|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
         proxy_cache_valid 200 6s;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 2s;
+        proxy_cache_lock_age 5s;
+        proxy_read_timeout 20s;
         proxy_hide_header Server;
         proxy_hide_header Location;
     }}
@@ -619,50 +710,10 @@ server {{
 
 {resolved_locations}
 
-    # Relays fechados para os destinos de VOD observados no upstream autorizado.
-    # Os prefixos apontam somente para hosts fixos e não formam um proxy aberto.
-    location ^~ /__cdnmnus_vod_0/ {{
-        internal;
-        proxy_pass http://cdnmnus_vod_gateway/;
-        proxy_set_header Host servicedovod.lat;
-        proxy_intercept_errors on;
-        error_page 401 403 404 410 500 502 503 504 = @cdnmnus_refresh;
-        proxy_hide_header Server;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-    }}
-
-    location ^~ /__cdnmnus_vod_1/ {{
-        internal;
-        proxy_pass http://cdnmnus_vod_storage/;
-        proxy_set_header Host fragrant-harbor-683b.2dzncf9igp3u.workers.dev;
-        proxy_hide_header Server;
-        proxy_hide_header Location;
-        proxy_intercept_errors on;
-        error_page 401 403 404 410 500 502 503 504 = @cdnmnus_refresh;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-    }}
-
-    location ^~ /__cdnmnus_vod_retry_0/ {{
-        internal;
-        proxy_pass http://cdnmnus_vod_gateway/;
-        proxy_set_header Host servicedovod.lat;
-        proxy_hide_header Server;
-        proxy_hide_header Location;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-    }}
-
-    location ^~ /__cdnmnus_vod_retry_1/ {{
-        internal;
-        proxy_pass http://cdnmnus_vod_storage/;
-        proxy_set_header Host fragrant-harbor-683b.2dzncf9igp3u.workers.dev;
-        proxy_hide_header Server;
-        proxy_hide_header Location;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-    }}
+    # Relays fechados para sementes VOD explicitamente administradas.
+    # Os prefixos sao internos e nao formam um proxy aberto.
+{vod_locations}
+{dynamic_vod_location}
 {lb_location}}}
 '''
 
@@ -694,7 +745,7 @@ def apply_config(config: dict[str, Any]) -> None:
         "public_host": config["public_host"],
         "load_balancers": config.get("load_balancers", []),
         "ttl_seconds": 15,
-        "vod_hosts": ["servicedovod.lat", "fragrant-harbor-683b.2dzncf9igp3u.workers.dev"],
+        "vod_hosts": configured_vod_hosts(),
     }
     atomic_write(TOKEN_BROKER_CONFIG, json.dumps(token_config, ensure_ascii=False) + "\n", 0o640)
     try:

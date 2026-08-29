@@ -32,6 +32,10 @@ with tempfile.TemporaryDirectory() as root:
     assert "location ^~ /__cdnmnus_xui1_lb_0/" in output.content
     assert output.content == render_tenant(db.tenant("xui1")).content
 
+    no_vod_output = render_tenant(db.tenant("xui2")).content
+    assert "upstream vod_relay_xui2" not in no_vod_output
+    assert "location ~ ^/(?:movie|series)/" in no_vod_output and "return 503;" in no_vod_output
+
     rendered = render_all(db.tenants())
     assert sorted(rendered) == ["tenants/xui1.conf", "tenants/xui2.conf"]
     snapshot = json.loads(broker_snapshot(db.tenants(), 2))

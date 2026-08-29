@@ -139,3 +139,23 @@ ser feita com `nginx -t` antes de qualquer reload; no host de controle atual o
 teste ainda acusa um upstream externo não resolvível em
 `/etc/nginx/conf.d/99-cdnmnus-upstream.conf`, falha preexistente e independente
 da troca visual.
+
+## Revalidação de latência do armazenamento
+
+A continuação da auditoria confirmou espaço e inodes suficientes, ausência de
+cache `*.stale-*` e nenhum erro registrado pelo ext4 (`errors_count=0`,
+`warning_count=0`, estado `clean`). O `etime` exibido para `jbd2/vda1-8` é a
+idade do thread desde o boot e não comprova, isoladamente, bloqueio contínuo.
+
+Ainda assim, a degradação de I/O é real: um `fdatasync` de 4 KiB no volume raiz
+levou aproximadamente 1,05 s, contra menos de 0,01 s em tmpfs. Em um SQLite
+descartável, habilitar WAL levou 12,38 s e um commit mínimo levou 6,03 s. A
+pressão `full` de I/O ficou acima de 79%. Não houve mensagem de `I/O error`,
+journal abortado ou corrupção EXT4 no kernel.
+
+O diagnóstico atual é latência severa do dispositivo virtio/host de
+armazenamento, não corrupção comprovada. Não executar `fsck` online, remontar
+`/` ou reiniciar a edge enquanto ela estiver no pool. A correção segura exige
+incidente no provedor, snapshot consistente e drain antes de migração/reboot.
+Se a latência persistir, a verificação do filesystem deve ocorrer offline pela
+console de recuperação.

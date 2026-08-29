@@ -125,3 +125,20 @@ nova publicação do painel       -> concluída sem reintroduzir o hostname
 ```
 
 Nenhuma credencial, playlist ou token foi incluído nesta documentação.
+
+## Especificação de evolução da camada VOD
+
+A arquitetura segura para manter a cadeia de redirects de filmes e séries
+inteiramente atrás da CDN, aceitando fornecedores posteriores descobertos a
+partir de uma seed administrada, está definida em
+[VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md).
+
+Essa especificação não altera o diagnóstico desta auditoria: o Workers legado
+continua precisando ser removido antes de qualquer reload ou rollout.
+
+## Atualização de remediação — 28/08/2026
+
+O Workers legado foi removido do gerador e do include candidato, mantendo apenas
+seeds VOD administradas. Foram preservados backups do include e da configuração
+do broker. `nginx -t` passou, `/edge-health` respondeu `200` antes e depois, e o
+reload controlado foi concluído sem alterar os blocos HLS/live.
