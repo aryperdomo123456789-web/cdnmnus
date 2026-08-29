@@ -5,6 +5,8 @@
 
 # Ambientes e caches
 .env
+*.env
+*.env.*
 .cache/
 .DS_Store
 
@@ -19,5 +21,27 @@ venv/
 
 # Estado/segredos do plano administrativo
 admin.db*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.ed25519
+id_rsa*
+id_ed25519*
+*.age
+*.7z
+*.tar
+*.tar.gz
+*.tar.zst
+*.m3u
+*.m3u8
+credentials/
+secrets/
 ansible/inventories/production/hosts.yml
 releases/

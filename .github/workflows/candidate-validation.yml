@@ -1,0 +1,82 @@
+name: Candidate validation
+
+on:
+  push:
+    branches:
+      - main
+      - production/**
+    tags:
+      - "v*-production-candidate*"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout fechado no commit do evento
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Impedir credenciais e artefatos privados rastreados
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -Eiq '(^|/)([^/]*\.env([^/]*)?|[^/]*\.(db|sqlite|sqlite3|pem|key|p12|pfx|jks|ed25519|age|7z|m3u|m3u8))$'; then
+            echo "Arquivo privado rastreado pelo Git" >&2
+            exit 1
+          fi
+          if git grep -nEI 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization:[[:space:]]*(Basic|Bearer)' -- . ':(exclude)docs/**'; then
+            echo "Possível segredo encontrado" >&2
+            exit 1
+          fi
+
+      - name: Compilar fontes Python
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for path in Path('.').rglob('*.py'):
+              compile(path.read_bytes(), str(path), 'exec')
+          PY
+
+      - name: Executar testes funcionais
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          TMPDIR: /tmp
+        run: |
+          set -euo pipefail
+          for test in \
+            tests/admin_core_test.py \
+            tests/admin_web_test.py \
+            tests/edge_manager_test.py \
+            tests/release_integrity_test.py \
+            tests/multi_tenant_broker_test.py \
+            tests/panel_http_test.py \
+            tests/token_broker_test.py \
+            tests/vod_relay_test.py \
+            tests/vod_player_compatibility_test.py
+          do
+            python "$test"
+          done
+
+      - name: Executar smoke e verificar whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/smoke.sh
+          git diff --check
