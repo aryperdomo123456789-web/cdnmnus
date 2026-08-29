@@ -80,3 +80,22 @@ jobs:
           set -euo pipefail
           bash tests/smoke.sh
           git diff --check
+
+      - name: Validar sintaxe dos playbooks com Ansible suportado
+        shell: bash
+        env:
+          ANSIBLE_CONFIG: ${{ github.workspace }}/ansible/ansible.cfg
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check ansible-core==2.17.14
+          cp ansible/inventories/production/hosts.yml.example /tmp/cdnmnus-hosts.yml
+          extra_vars='{"release_id":"20260829012407-d60cfdbf","release_source":"/tmp/release","config_digest":"9e5457a1dd27609a573c0fd7cbcc80db1d84378da118d7e0dc70d70d7a534eb0","canonical_health_host":"canary.invalid","tenant_ids":["xui-principal"],"vod_tenant_ids":["xui-principal"],"tenant_health_hosts":[{"host":"canary.invalid"}]}'
+          for playbook in \
+            ansible/playbooks/preflight-edge.yml \
+            ansible/playbooks/deploy-edge.yml \
+            ansible/playbooks/activate-edge.yml \
+            ansible/playbooks/deploy-and-activate-edge.yml \
+            ansible/playbooks/audit-edge-releases.yml
+          do
+            ansible-playbook --syntax-check -i /tmp/cdnmnus-hosts.yml "$playbook" --extra-vars "$extra_vars"
+          done
