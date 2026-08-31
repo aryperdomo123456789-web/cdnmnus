@@ -34,6 +34,10 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
     release_id = time.strftime("%Y%m%d%H%M%S", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
     root = Path(release_root)
     root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    database_owner = db.path.stat()
+    if os.geteuid() == 0:
+        os.chown(root, database_owner.st_uid, database_owner.st_gid)
+    os.chmod(root, 0o700)
     final = root / release_id
     with tempfile.TemporaryDirectory(prefix=".release-", dir=root) as temp_name:
         temp = Path(temp_name)
@@ -71,6 +75,13 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
                     "tenant_count": len(tenants), "config_digest": digest, "files": hashes}
         (temp / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.chmod(temp / "manifest.json", 0o640)
+        # O menu é root, enquanto o worker roda como cdn-admin. A release deve
+        # permanecer privada, mas legível pelo mesmo proprietário do banco.
+        for path in [temp, *temp.rglob("*")]:
+            if os.geteuid() == 0:
+                os.chown(path, database_owner.st_uid, database_owner.st_gid)
+            os.chmod(path, 0o750 if path.is_dir() else 0o640)
+        os.chmod(temp, 0o700)
         # Mesmo filesystem: a release só se torna visível depois de completa.
         os.rename(temp, final)
     return {**manifest, "artifact_path": str(final)}

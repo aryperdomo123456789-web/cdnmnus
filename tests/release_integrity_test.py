@@ -34,6 +34,10 @@ with tempfile.TemporaryDirectory() as temp_name:
     second = build_release(db, root / "releases")
     assert first["config_digest"] == second["config_digest"]
     release_path = Path(str(first["artifact_path"]))
+    assert release_path.stat().st_uid == db.path.stat().st_uid
+    assert (release_path.stat().st_mode & 0o777) == 0o700
+    assert (release_path / "manifest.json").stat().st_uid == db.path.stat().st_uid
+    assert (release_path / "manifest.json").stat().st_mode & 0o777 == 0o640
     assert verify(release_path, first).returncode == 0
     assert (release_path / "runtime/multi_tenant_broker.py").is_file()
     assert "runtime/multi_tenant_broker.py" in first["files"]
