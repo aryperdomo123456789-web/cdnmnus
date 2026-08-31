@@ -55,6 +55,13 @@ Promoção/rollback validam antes da publicação e restauram fail-closed. O mod
 laboratório recusa qualquer backend fora de loopback. Testes usaram somente
 servidores HTTP falsos locais.
 
+O cadastro universal passou a ser acessível pelo menu SSH de qualquer edge/LB
+admitido. A operação continua centralizada: credencial inicial viaja somente no
+stdin SSH, o control plane fixa a host key por TOFU auditado, instala a tag
+aprovada do GitHub e registra edge em `bootstrapping` ou LB direto em
+`candidate`. Deployments de onboarding possuem `target_edge_id`, impedindo que
+o cadastro de uma VPS reaplique configuração nas edges prontas.
+
 ## Frente 4 — PostgreSQL/failover
 
 Decisão provisória: banco dedicado/gerenciado em rede administrativa, não nos

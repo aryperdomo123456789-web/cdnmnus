@@ -44,9 +44,45 @@ HAProxy nunca é ativado pelo pacote. O runtime multi-tenant também não é
 ativado sem snapshot: o onboarding do control plane distribui a release,
 valida digest, ativa broker/relay/Nginx, audita e só então marca `ready`.
 
+## Cadastro por qualquer menu SSH
+
+O operador não precisa abrir console do provedor nem executar comandos na VPS.
+Em qualquer edge/LB já admitido na malha, a opção **Cadastrar nova máquina
+(Edge ou Load Balancer)** solicita somente:
+
+- papel inicial (`edge` ou `load_balancer`);
+- nome, IPv4, porta e usuário SSH inicial;
+- senha inicial, em campo oculto.
+
+O menu envia um JSON de contrato fechado pelo stdin de uma sessão SSH
+autenticada até o control plane. A senha não aparece em argv/env, não é gravada
+em arquivo/banco/evento e é descartada após criar a identidade Ed25519.
+
+Por decisão operacional explícita, a primeira host key usa **TOFU automatizado
+auditado**: o control plane captura a chave, exige que a segunda captura durante
+o login seja idêntica e então a fixa em `known_hosts` e no banco. Isso elimina a
+consulta manual ao console do provedor, mas não equivale a uma confirmação por
+canal independente; troca posterior da chave falha fechado.
+
+O control plane então:
+
+1. reserva ID numérico;
+2. cria `cdn-deploy` e comprova login por chave;
+3. clona do GitHub apenas a tag aprovada e confere commit/manifesto;
+4. instala menu, identidade, broker, relay, recuperação e pré-requisito de LB;
+5. converge e testa a malha SSH;
+6. se `edge`, registra `bootstrapping` e enfileira um deployment exclusivo para
+   aquele `target_edge_id`;
+7. se `load_balancer`, registra diretamente como `candidate`, com HAProxy
+   desabilitado e sem qualquer mudança de DNS.
+
+O release autorizado fica em `/etc/cdnmnus/managed-node-release.json`, pertence
+a root e não pode ser gravável por grupo/outros. Um onboarding nunca escolhe
+`main`, `latest` ou uma versão fornecida pelo nó solicitante.
+
 ## Solicitação edge para LB
 
-Em uma edge `ready`, o menu local mostra **Solicitar preparação para Load
+Em uma edge `ready`, o menu local mostra **Promover esta Edge para Load
 Balancer**. Essa ação envia apenas uma solicitação autenticada ao control plane.
 Não muda papel, DNS, Nginx ou HAProxy.
 

@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from core.db import Database, normalize_id
 from core.deploy import queue_deployment
-from core.edge_manager import bootstrap_edge, converge_ssh_mesh, scan_host_identity
+from core.node_onboarding import onboard_node
 from core.render_tenants import render_tenant
 from core.topology import TopologyStore
 
@@ -255,57 +255,43 @@ def edge_list(db: Database) -> None:
     message("EDGES\n\n" + ("\n".join(lines) if lines else "Nenhuma edge cadastrada."))
 
 
-def edge_add(db: Database) -> None:
-    name = ask("Nome da edge")
+def node_add(db: Database) -> None:
+    role = choose("Papel inicial", [
+        ("edge", "Edge — recebe runtime e deployment isolado"),
+        ("load_balancer", "Load Balancer — entra somente como candidate"),
+    ])
+    if role is None: return
+    name = ask("Nome da nova máquina")
     if name is None: return
-    edge_id = db.reserve_node_id()
-    ipv4 = ask("IPv4 público da edge")
+    ipv4 = ask("IPv4 público da nova máquina")
     if ipv4 is None: return
     port_raw = ask("Porta SSH", "22")
     if port_raw is None: return
     initial_user = ask("Usuário SSH inicial", "root")
     if initial_user is None: return
-    identity = scan_host_identity(ipv4, int(port_raw))
     if not confirm(
-        "FINGERPRINT SSH APRESENTADO\n\n"
-        f"Algoritmo: {identity.key_type}\n{identity.sha256}\n\n"
-        "Compare obrigatoriamente com o console do provedor. Está correto?"
+        f"Cadastrar {name.strip()} ({ipv4}:{port_raw}) como {role}?\n\n"
+        "O control plane capturará a host key duas vezes, fixará por TOFU auditado, "
+        "instalará somente a tag aprovada e não ativará um LB automaticamente."
     ):
-        raise PermissionError("fingerprint não confirmado")
-    typed = ask("Digite o fingerprint completo para confirmar")
-    if typed != identity.sha256:
-        raise PermissionError("fingerprint digitado diverge")
+        return
     password = ask("Senha inicial (não será armazenada)", password=True)
     if password is None: return
     try:
-        result = bootstrap_edge(ipv4, int(port_raw), initial_user, password, typed, edge_id)
+        result = onboard_node(
+            db, name=name, ipv4=ipv4, ssh_port=int(port_raw),
+            initial_user=initial_user, password=password, role=role,
+            operator="control-plane-menu", control_plane="143.14.168.111",
+        )
     finally:
         password = ""; del password; gc.collect()
-    edge = db.add_edge(edge_id, name, ipv4, int(port_raw), result["ssh_user"],
-                       result["fingerprint"], "bootstrapping")
-    edge_id = edge["id"]
-    try:
-        converge_ssh_mesh(db.path)
-    except Exception:
-        db.set_edge_state(edge_id, "failed", operator="ssh-mesh",
-                          reason="falha ao integrar a edge à malha SSH")
-        raise
-    if db.tenants(enabled_only=True):
-        deployment = queue_deployment(db, target_edge_id=edge_id)
-        message(
-            f"Edge {edge_id} cadastrada e em preparação.\n"
-            "Conexão por chave Ed25519 validada.\n\n"
-            f"Implantação adicionada à fila: {deployment['deployment_id']}\n"
-            f"Versão: {deployment['release_id']}\n"
-            "O orquestrador aplicará preflight, runtime, TLS e health em série.\n"
-            "A edge só deve entrar no DNS após os gates de mídia e failover."
-        )
-    else:
-        message(
-            f"Edge {edge_id} cadastrada e em preparação.\n"
-            "Conexão por chave Ed25519 validada.\n\n"
-            "Nenhum tenant habilitado: cadastre o tenant antes do deployment."
-        )
+    deployment = result.get("deployment_id") or "não aplicável ao LB candidate"
+    message(
+        f"Máquina {result['node_id']} cadastrada como {result['role']}.\n"
+        f"Estado: {result['state']}\nPacote: {result['package_ref']}\n"
+        f"Deployment: {deployment}\n\n"
+        "Senha descartada; host key fixada. LB não foi ativado."
+    )
 
 
 def edge_action(db: Database, state: str) -> None:
@@ -352,7 +338,7 @@ def edges_menu(db: Database) -> None:
     while True:
         action = choose("Edges — distribuição e entrega", [
             ("1", "Consultar edges, estados e versões"),
-            ("2", "Adicionar edge com preparação segura"),
+            ("2", "Cadastrar nova máquina como Edge ou Load Balancer"),
             ("3", "Renomear edge (preserva o ID técnico)"),
             ("4", "Iniciar drenagem de uma edge"),
             ("5", "Marcar edge como pronta"),
@@ -362,7 +348,7 @@ def edges_menu(db: Database) -> None:
         try:
             if action in (None, "0"): return
             if action == "1": edge_list(db)
-            elif action == "2": edge_add(db)
+            elif action == "2": node_add(db)
             elif action == "3": edge_rename(db)
             elif action == "4": edge_action(db, "draining")
             elif action == "5": edge_action(db, "ready")
@@ -608,7 +594,7 @@ def infrastructure_menu(db: Database) -> None:
     while True:
         action = choose("Infraestrutura e distribuição", [
             ("1", "Servidores registrados, IDs, papéis e estados"),
-            ("2", "Edges — cadastro, nomes, estado e drenagem"),
+            ("2", "Máquinas — cadastro Edge/LB e operação das edges"),
             ("3", "DNS e matriz de distribuição"),
             ("4", "Implantações, versões e execução sequencial"),
             ("5", "Solicitações para preparar Load Balancer"),

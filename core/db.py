@@ -340,9 +340,12 @@ class Database:
             ).fetchone()
             if topology_enabled:
                 db.execute(
-                    """INSERT INTO nodes(id,name,ipv4,role,state,capacity_json)
-                       VALUES(?,?,?,'edge',?,'{}')""",
-                    (edge_id, name.strip(), str(address), state),
+                    """INSERT INTO nodes(
+                           id,name,ipv4,ssh_port,ssh_user,host_key_sha256,
+                           role,state,capacity_json
+                       ) VALUES(?,?,?,?,?,?,'edge',?,'{}')""",
+                    (edge_id, name.strip(), str(address), normalize_port(ssh_port),
+                     ssh_user.strip(), fingerprint, state),
                 )
                 db.execute(
                     """INSERT INTO node_events(

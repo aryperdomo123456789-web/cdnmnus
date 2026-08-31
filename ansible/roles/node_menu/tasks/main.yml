@@ -97,6 +97,15 @@
     mode: '0755'
   when: cdnmnus_node_id | string == '1'
 
+- name: Instalar receptor restrito de onboarding no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/submit_node_onboarding.py"
+    dest: /usr/local/sbin/cdnmnus-submit-node-onboarding
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
 - name: Garantir usuário operacional no control plane
   ansible.builtin.user:
     name: cdn-deploy
@@ -118,6 +127,7 @@
     content: |
       Defaults:cdn-deploy env_keep += "SSH_CONNECTION"
       cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-promotion-request *
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-node-onboarding
     dest: /etc/sudoers.d/cdn-deploy
     owner: root
     group: root

@@ -27,6 +27,15 @@ def message(text):
     dialog(["--scrolltext", "--msgbox", text, "20", "92"])
 
 
+def ask(prompt, default="", password=False):
+    kind = "--passwordbox" if password else "--inputbox"
+    arguments = [kind, prompt, "10", "88"]
+    if default and not password:
+        arguments.append(default)
+    code, value = dialog(arguments)
+    return value if code == 0 else None
+
+
 def service(name):
     result = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, check=False)
     return result.stdout.strip() or "desconhecido"
@@ -84,6 +93,66 @@ def package_identity():
     return data
 
 
+def control_plane_ssh(host, remote_command, input_text=None, timeout=30):
+    command = [
+        "runuser", "-u", "cdn-deploy", "--", "ssh", "-T",
+        "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
+        "-o", "StrictHostKeyChecking=yes", f"cdn-deploy@{host}", remote_command,
+    ]
+    return subprocess.run(
+        command, input=input_text, capture_output=True, text=True,
+        timeout=timeout, check=False,
+    )
+
+
+def request_node_onboarding(host):
+    code, role = dialog(["--menu", "Papel inicial da nova máquina", "14", "82", "2",
+                         "edge", "Cadastrar como Edge",
+                         "load_balancer", "Cadastrar diretamente como LB candidate"])
+    if code != 0:
+        return
+    name = ask("Nome amigável da nova máquina")
+    ipv4 = ask("IPv4 público da nova máquina")
+    port = ask("Porta SSH", "22")
+    initial_user = ask("Usuário SSH inicial", "root")
+    password = ask("Senha SSH inicial — usada uma vez e nunca armazenada", password=True)
+    if None in (name, ipv4, port, initial_user, password):
+        return
+    payload = {
+        "name": name.strip(), "ipv4": ipv4.strip(), "ssh_port": int(port),
+        "initial_user": initial_user.strip(), "password": password, "role": role,
+    }
+    password = ""
+    code, _ = dialog([
+        "--yesno",
+        f"Cadastrar {payload['name']} ({payload['ipv4']}:{payload['ssh_port']}) como {role}?\n\n"
+        "O control plane fixará a host key por TOFU auditado, instalará a tag aprovada e "
+        "nunca ativará um LB diretamente.",
+        "15", "88",
+    ])
+    if code != 0:
+        payload.clear()
+        return
+    try:
+        result = control_plane_ssh(
+            host, "sudo -n /usr/local/sbin/cdnmnus-submit-node-onboarding",
+            json.dumps(payload), timeout=2100,
+        )
+    finally:
+        payload.clear()
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(detail[-1] if detail else "control plane recusou o onboarding")
+    response = json.loads(result.stdout)
+    deployment = response.get("deployment_id") or "não aplicável ao LB candidate"
+    message(
+        "NOVA MÁQUINA REGISTRADA\n\n"
+        f"ID: {response['node_id']}\nPapel: {response['role']}\nEstado: {response['state']}\n"
+        f"Pacote: {response['package_ref']}\nDeployment: {deployment}\n\n"
+        "A senha não foi armazenada. LB permanece sem ativação até lock/fencing."
+    )
+
+
 def request_promotion(data, host):
     if data.get("role") != "edge" or data.get("state") != "ready":
         raise RuntimeError("somente uma edge ready pode solicitar preparação para LB")
@@ -106,12 +175,7 @@ def request_promotion(data, host):
         "--manifest-digest", package["manifest_digest"], "--reason", reason.strip(),
     ]
     remote_command = " ".join(shlex.quote(part) for part in remote_arguments)
-    command = [
-        "ssh", "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
-        "-o", "StrictHostKeyChecking=yes", f"cdn-deploy@{host}",
-        remote_command,
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    result = control_plane_ssh(host, remote_command, timeout=30)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
         raise RuntimeError(detail[-1] if detail else "control plane recusou a solicitação")
@@ -134,9 +198,10 @@ def main():
                                "2", "Situação dos serviços locais",
                                "3", "Validar configuração Nginx/HAProxy",
                                "4", "Orientações para operações centralizadas",
+                               "5", "Cadastrar nova máquina (Edge ou Load Balancer)",
         ]
         if data.get("role") == "edge" and data.get("state") == "ready":
-            entries.extend(["5", "Solicitar preparação para Load Balancer"])
+            entries.extend(["6", "Promover esta Edge para Load Balancer"])
         entries.extend(["0", "Sair"])
         code, action = dialog(["--menu", header, "21", "92", str(len(entries) // 2), *entries])
         if code != 0 or action == "0": return 0
@@ -156,6 +221,11 @@ def main():
             message("Alterações de função, DNS, promoção e implantação são autorizadas apenas pelo Control Plane.\n\n"
                     "Este cliente é read-only local e não cria estado paralelo nem promove nós sem lock/fencing.")
         elif action == "5":
+            try:
+                request_node_onboarding(host)
+            except Exception as exc:
+                message("CADASTRO RECUSADO\n\n" + str(exc))
+        elif action == "6":
             try:
                 request_promotion(data, host)
             except Exception as exc:

@@ -151,11 +151,16 @@ Regra de ouro:
 - baseline para futura promoção a LB: 2 vCPU, aproximadamente 4 GiB, NTP,
   reserva de disco de 20%, `socat`, identidade comum e capacidade
   `load_balancer_candidate`; HAProxy permanece bloqueado até promoção real.
-- pacote universal GitHub separado do instalador legado implementado localmente,
-  com tag+commit+digest, manifesto fechado, backup/rollback e HAProxy desativado;
-  menu da edge registra solicitação no control plane e o processador só prepara
-  `candidate`/`standby`. Publicação e homologação remota ainda dependem da tag
-  e da confirmação do fingerprint da VPS descartável.
+- pacote universal GitHub separado do instalador legado, com tag+commit+digest,
+  manifesto fechado, backup/rollback e HAProxy desativado;
+- qualquer menu de nó admitido pode enviar ao control plane um cadastro de nova
+  VPS como edge ou LB. Senha segue somente por stdin SSH e não é persistida;
+  a host key usa TOFU automatizado com duas capturas idênticas e pinning
+  posterior. Edge recebe deployment exclusivo por `target_edge_id`; LB direto
+  nasce `candidate`, nunca `active`;
+- menu da edge registra solicitação de promoção no control plane e o processador
+  só prepara `candidate`/`standby`. A homologação remota integral permanece
+  pendente na VPS descartável.
 
 ## 4. O que ainda é gate de produção
 

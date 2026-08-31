@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from core.db import normalize_port
 
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+GITHUB_REPO = "https://github.com/aryperdomo123456789-web/cdnmnus.git"
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,55 @@ def bootstrap_edge(host: str, port: int, initial_user: str, password: str,
             del password
             gc.collect()
     return {"fingerprint": identity.sha256, "private_key": str(private_path), "ssh_user": "cdn-deploy"}
+
+
+def install_managed_node_package(host: str, port: int, node_id: str, node_name: str,
+                                 role: str, control_plane: str, source_ref: str,
+                                 source_commit: str, manifest_digest: str,
+                                 key_dir: str | Path = "/etc/cdnmnus/ssh",
+                                 timeout: int = 1800) -> dict[str, str]:
+    """Instala do GitHub uma tag fechada usando somente a chave recém-criada."""
+    if role not in {"edge", "load_balancer"}:
+        raise ValueError("papel inicial inválido")
+    if not re.fullmatch(r"v[0-9][A-Za-z0-9._-]*", source_ref):
+        raise ValueError("tag imutável inválida")
+    if not re.fullmatch(r"[a-f0-9]{40}", source_commit):
+        raise ValueError("commit aprovado inválido")
+    if not re.fullmatch(r"[a-f0-9]{64}", manifest_digest):
+        raise ValueError("digest do manifesto inválido")
+    identity = scan_host_identity(host, port)
+    key_root = Path(key_dir)
+    key_path = key_root / f"{node_id}.ed25519"
+    known_hosts = key_root / "known_hosts"
+    if not key_path.is_file() or not known_hosts.is_file():
+        raise FileNotFoundError("identidade SSH do nó ainda não foi criada")
+    script = (
+        "set -Eeuo pipefail; export DEBIAN_FRONTEND=noninteractive; "
+        "command -v git >/dev/null || { apt-get update; apt-get install -y git ca-certificates; }; "
+        "work=$(mktemp -d /tmp/cdnmnus-managed.XXXXXX); "
+        "trap 'rm -rf -- \"$work\"' EXIT; "
+        f"git clone --quiet --depth 1 --branch {shlex.quote(source_ref)} "
+        f"{shlex.quote(GITHUB_REPO)} \"$work/source\"; "
+        "actual=$(git -C \"$work/source\" rev-parse HEAD); "
+        f"test \"$actual\" = {shlex.quote(source_commit)}; "
+        "\"$work/source/node-package/install.sh\" "
+        f"--role {shlex.quote(role)} --node-id {shlex.quote(node_id)} "
+        f"--node-name {shlex.quote(node_name)} --control-plane {shlex.quote(control_plane)} "
+        f"--source-ref {shlex.quote(source_ref)} --source-commit {shlex.quote(source_commit)} "
+        f"--manifest-digest {shlex.quote(manifest_digest)}"
+    )
+    result = subprocess.run(
+        ["ssh", "-i", str(key_path), "-p", str(identity.port),
+         "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
+         "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known_hosts}",
+         f"cdn-deploy@{identity.host}", "sudo", "-n", "bash", "-c", shlex.quote(script)],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(detail[-1] if detail else "instalação do pacote versionado falhou")
+    return {"ref": source_ref, "commit": source_commit,
+            "manifest_digest": manifest_digest, "role": role}
 
 
 def converge_ssh_mesh(db_path: str | Path = "/var/lib/cdnmnus-admin/admin.db",

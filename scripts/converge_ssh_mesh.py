@@ -95,10 +95,8 @@ def ensure_local_identity(node_id: str) -> str:
              "-N", "", "-C", f"cdnmnus-mesh-{node_id}", "-f", str(key)])
     os.chmod(key, 0o600)
     os.chmod(key.with_suffix(".pub"), 0o644)
-    sudoers = Path("/etc/sudoers.d/cdn-deploy")
-    sudoers.write_text("cdn-deploy ALL=(root) NOPASSWD: ALL\n", encoding="utf-8")
-    os.chmod(sudoers, 0o440)
-    run(["visudo", "-cf", str(sudoers)])
+    # O control plane recebe apenas RPCs explicitamente liberados pelo role
+    # node_menu. A convergência jamais deve conceder sudo irrestrito aqui.
     return key.with_suffix(".pub").read_text(encoding="utf-8").strip()
 
 
@@ -179,7 +177,13 @@ def load_nodes(db_path: Path, key_dir: Path, control_host: str) -> list[Node]:
     nodes = [Node("control-plane", control_host, 22, None, "", True)]
     db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
-    for row in db.execute("SELECT id,ipv4,ssh_port,host_key_sha256,state FROM edges ORDER BY id"):
+    for row in db.execute(
+        """SELECT id,ipv4,ssh_port,host_key_sha256,state
+             FROM nodes
+            WHERE role IN ('edge','load_balancer')
+              AND ssh_port IS NOT NULL AND host_key_sha256 IS NOT NULL
+            ORDER BY CAST(id AS INTEGER),id"""
+    ):
         if row["state"] == "disabled":
             continue
         preferred = key_dir / f"{row['id']}.ed25519"

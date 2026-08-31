@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple, overload
 
-from core.db import Database, normalize_hostname, normalize_id
+from core.db import Database, normalize_hostname, normalize_id, normalize_port
 
 
 MIGRATION_ID = "20260829_topology_v1"
@@ -114,6 +114,9 @@ class TopologyStore:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
                     ipv4 TEXT NOT NULL UNIQUE,
+                    ssh_port INTEGER CHECK(ssh_port BETWEEN 1 AND 65535),
+                    ssh_user TEXT,
+                    host_key_sha256 TEXT,
                     role TEXT NOT NULL CHECK(role IN ('control_plane','edge','load_balancer')),
                     state TEXT NOT NULL,
                     release_id TEXT,
@@ -244,6 +247,24 @@ class TopologyStore:
                     SELECT RAISE(ABORT, 'promotion lock history cannot be deleted');
                 END;
             """)
+            node_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(nodes)").fetchall()
+            }
+            for name, definition in (
+                ("ssh_port", "INTEGER CHECK(ssh_port BETWEEN 1 AND 65535)"),
+                ("ssh_user", "TEXT"),
+                ("host_key_sha256", "TEXT"),
+            ):
+                if name not in node_columns:
+                    db.execute(f"ALTER TABLE nodes ADD COLUMN {name} {definition}")
+            db.execute(
+                """UPDATE nodes
+                      SET ssh_port=COALESCE(ssh_port,(SELECT e.ssh_port FROM edges e WHERE e.id=nodes.id)),
+                          ssh_user=COALESCE(ssh_user,(SELECT e.ssh_user FROM edges e WHERE e.id=nodes.id)),
+                          host_key_sha256=COALESCE(host_key_sha256,
+                              (SELECT e.host_key_sha256 FROM edges e WHERE e.id=nodes.id))
+                    WHERE role='edge'"""
+            )
             # Compatibilidade: a tabela edges permanece autoritativa para os
             # deploys atuais. A cópia inicial apenas prepara o modelo novo.
             legacy_edges = db.execute(
@@ -303,7 +324,9 @@ class TopologyStore:
         return event_id
 
     def add_node(self, node_id: str, name: str, ipv4: str, role: str, state: str,
-                 operator: str, reason: str, capacity: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                 operator: str, reason: str, capacity: Mapping[str, Any] | None = None,
+                 ssh_port: int | None = None, ssh_user: str | None = None,
+                 host_key_sha256: str | None = None) -> dict[str, Any]:
         node_id = normalize_id(node_id, "node_id")
         role = role.strip().lower()
         state = state.strip().lower()
@@ -316,11 +339,19 @@ class TopologyStore:
             raise ValueError("ipv4 do nó é inválido")
         if not name.strip():
             raise ValueError("nome do nó é obrigatório")
+        supplied_ssh = (ssh_port is not None, bool(ssh_user), bool(host_key_sha256))
+        if any(supplied_ssh) and not all(supplied_ssh):
+            raise ValueError("metadados SSH devem ser fornecidos em conjunto")
+        if all(supplied_ssh):
+            ssh_port = normalize_port(ssh_port)
         capacity_json = json.dumps(_validate_payload(capacity or {}), sort_keys=True, separators=(",", ":"))
         with self.database.transaction(immediate=True) as db:
             db.execute(
-                "INSERT INTO nodes(id,name,ipv4,role,state,capacity_json) VALUES(?,?,?,?,?,?)",
-                (node_id, name.strip(), str(address), role, state, capacity_json),
+                """INSERT INTO nodes(
+                       id,name,ipv4,ssh_port,ssh_user,host_key_sha256,role,state,capacity_json
+                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (node_id, name.strip(), str(address), ssh_port, ssh_user,
+                 host_key_sha256, role, state, capacity_json),
             )
             self._event(db, node_id, "node_created", operator, reason, {"role": role, "state": state})
         return self.node(node_id)
