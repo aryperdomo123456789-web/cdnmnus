@@ -95,6 +95,7 @@ class NodePackageTest(unittest.TestCase):
         self.assertNotIn('"load_balancer_action": "promote"', processor)
         self.assertIn('"load_balancer_action": "deploy"', processor)
         self.assertIn('ROOT / "venv/bin/ansible-playbook"', processor)
+        self.assertIn('ansible_environment["ANSIBLE_CONFIG"]', processor)
         lb_playbook = (ROOT / "ansible/playbooks/load-balancer.yml").read_text()
         self.assertIn("Publicar identidade LB somente após candidato HAProxy válido", lb_playbook)
         self.assertIn("cdnmnus_node_role: load_balancer", lb_playbook)

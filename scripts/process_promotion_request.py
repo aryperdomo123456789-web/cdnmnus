@@ -117,6 +117,8 @@ def main() -> int:
     }
     result = None
     try:
+        ansible_environment = os.environ.copy()
+        ansible_environment["ANSIBLE_CONFIG"] = str(ROOT / "ansible/ansible.cfg")
         with tempfile.TemporaryDirectory(prefix="cdnmnus-promotion-") as temporary:
             root = Path(temporary)
             inventory_path = root / "inventory.json"; vars_path = root / "vars.json"
@@ -128,6 +130,7 @@ def main() -> int:
                  str(ROOT / "ansible/playbooks/load-balancer.yml"),
                  "--extra-vars", "@" + str(vars_path)],
                 cwd=ROOT, capture_output=True, text=True, timeout=1800, check=False,
+                env=ansible_environment,
             )
         if result.returncode != 0:
             detail = "\n".join((result.stderr or result.stdout).splitlines()[-8:])
