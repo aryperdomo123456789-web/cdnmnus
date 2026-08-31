@@ -99,6 +99,8 @@ class NodePackageTest(unittest.TestCase):
         lb_playbook = (ROOT / "ansible/playbooks/load-balancer.yml").read_text()
         self.assertIn("Publicar identidade LB somente após candidato HAProxy válido", lb_playbook)
         self.assertIn("cdnmnus_node_role: load_balancer", lb_playbook)
+        lb_template = (ROOT / "ansible/roles/load_balancer/templates/haproxy.cfg.j2").read_text()
+        self.assertIn("{{ '\\n' }}", lb_template)
 
 
 if __name__ == "__main__":

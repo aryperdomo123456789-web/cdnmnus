@@ -133,7 +133,7 @@ def main() -> int:
                 env=ansible_environment,
             )
         if result.returncode != 0:
-            detail = "\n".join((result.stderr or result.stdout).splitlines()[-8:])
+            detail = "\n".join((result.stderr or result.stdout).splitlines()[-30:])
             raise RuntimeError("role LB falhou:\n" + detail[:2000])
         database.finalize_load_balancer_candidate(
             args.request_id, "lb-" + edge["id"], backend_ids,

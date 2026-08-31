@@ -64,6 +64,7 @@ backend cdn_edges
     http-response del-header X-Powered-By
 {% for backend in load_balancer_backends %}
     server {{ backend.name }} {{ backend.address }}:{{ backend.port }} check inter {{ load_balancer_health_interval }} fall {{ load_balancer_health_fall }} rise {{ load_balancer_health_rise }} slowstart {{ load_balancer_backend_slowstart }} maxconn {{ backend.maxconn | default(load_balancer_backend_max_connections) }} weight {{ backend.weight | default(100) }}{% if load_balancer_backend_tls %} ssl verify required ca-file {{ load_balancer_backend_ca_file }} sni var(txn.safe_host) check-sni {{ load_balancer_backend_health_host }}{% endif %}{% if load_balancer_mode == 'draining' or backend.state | default('ready') in ['draining', 'disabled'] %} disabled{% endif %}
+{{ '\n' }}
 {% endfor %}
 
 listen cdn_stats_local
