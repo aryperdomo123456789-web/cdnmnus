@@ -77,7 +77,8 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
 
 
 def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
-               include_bootstrapping: bool = False) -> dict[str, Any]:
+               include_bootstrapping: bool = False,
+               edge_ids: set[str] | None = None) -> dict[str, Any]:
     hosts: dict[str, Any] = {}
     known_hosts = Path(key_dir) / "known_hosts"
     admitted_states = {"ready", "draining"}
@@ -87,6 +88,8 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
         # ``bootstrapping`` só é admitido pelo pipeline completo de onboarding,
         # que executa preflight, ativação e auditoria antes de promover a ready.
         if edge["state"] not in admitted_states:
+            continue
+        if edge_ids is not None and edge["id"] not in edge_ids:
             continue
         key_path = Path(key_dir) / f"{edge['id']}.ed25519"
         hosts[edge["id"]] = {
@@ -100,18 +103,28 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
             "cdnmnus_node_state": "ready",
         }
     if not hosts:
-        raise ValueError("nenhuma edge ready/draining para deploy")
+        raise ValueError("nenhuma edge elegível para este deployment")
     return {"all": {"children": {"cdn_edges": {"hosts": hosts}}}}
 
 
 def queue_deployment(db: Database,
-                     release_root: str | Path = "/var/lib/cdnmnus-admin/releases") -> dict[str, Any]:
+                     release_root: str | Path = "/var/lib/cdnmnus-admin/releases",
+                     target_edge_id: str | None = None) -> dict[str, Any]:
+    if target_edge_id is not None:
+        target_edge = db.edge(target_edge_id)
+        if target_edge["state"] != "bootstrapping":
+            raise ValueError("o alvo explícito de onboarding deve estar em bootstrapping")
     release = build_release(db, release_root)
     deployment_id = "dep-" + uuid.uuid4().hex
     with closing(db.connect()) as conn, conn:
-        conn.execute("INSERT INTO deployments(id,state,release_id,config_digest,artifact_path) VALUES(?,?,?,?,?)",
-                     (deployment_id, "queued", release["release_id"], release["config_digest"], release["artifact_path"]))
-    return {"deployment_id": deployment_id, "state": "queued", **release}
+        conn.execute(
+            "INSERT INTO deployments(id,state,release_id,config_digest,artifact_path,target_edge_id) "
+            "VALUES(?,?,?,?,?,?)",
+            (deployment_id, "queued", release["release_id"], release["config_digest"],
+             release["artifact_path"], target_edge_id),
+        )
+    return {"deployment_id": deployment_id, "state": "queued",
+            "target_edge_id": target_edge_id, **release}
 
 
 def claim_deployment(db: Database) -> dict[str, Any] | None:
@@ -138,7 +151,14 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
     if inventory is None:
         fd, generated_name = tempfile.mkstemp(prefix="cdnmnus-inventory-", suffix=".json")
         generated_inventory = Path(generated_name)
-        inventory_data = _inventory(db, key_dir, include_bootstrapping=True)
+        target_edge_id = deployment.get("target_edge_id")
+        target_edge_ids = {str(target_edge_id)} if target_edge_id else None
+        inventory_data = _inventory(
+            db,
+            key_dir,
+            include_bootstrapping=bool(target_edge_id),
+            edge_ids=target_edge_ids,
+        )
         managed_edge_ids = set(
             inventory_data["all"]["children"]["cdn_edges"]["hosts"]
         )

@@ -291,7 +291,7 @@ def edge_add(db: Database) -> None:
                           reason="falha ao integrar a edge à malha SSH")
         raise
     if db.tenants(enabled_only=True):
-        deployment = queue_deployment(db)
+        deployment = queue_deployment(db, target_edge_id=edge_id)
         message(
             f"Edge {edge_id} cadastrada e em preparação.\n"
             "Conexão por chave Ed25519 validada.\n\n"

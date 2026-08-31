@@ -1,5 +1,9 @@
 ---
 cdnmnus_control_plane_host: 143.14.168.111
+cdnmnus_control_plane_port: 22
+cdnmnus_control_plane_scheme: ssh
+cdnmnus_control_plane_verify: true
+cdnmnus_node_bootstrap_mode: managed
 cdnmnus_node_role: edge
 cdnmnus_node_state: bootstrapping
 cdnmnus_node_name: "Nó {{ cdnmnus_node_id }}"

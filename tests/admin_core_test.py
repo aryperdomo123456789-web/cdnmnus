@@ -97,7 +97,13 @@ with tempfile.TemporaryDirectory() as root:
         "future-ok", "Edge futura OK", "1.1.1.1", 22, "cdn-deploy",
         "SHA256:future-ok", "bootstrapping",
     )
-    onboarding = queue_deployment(db, Path(root) / "releases")
+    normal_hosts = _inventory(db, Path(root) / "keys")["all"]["children"]["cdn_edges"]["hosts"]
+    assert "future-ok" not in normal_hosts
+    onboarding_hosts = _inventory(
+        db, Path(root) / "keys", include_bootstrapping=True, edge_ids={"future-ok"},
+    )["all"]["children"]["cdn_edges"]["hosts"]
+    assert set(onboarding_hosts) == {"future-ok"}
+    onboarding = queue_deployment(db, Path(root) / "releases", target_edge_id="future-ok")
     onboarding_claim = claim_deployment(db)
     assert onboarding_claim is not None and onboarding_claim["id"] == onboarding["deployment_id"]
     with patch("core.deploy.shutil.which", return_value="/usr/bin/ansible-playbook"), patch(
@@ -114,7 +120,7 @@ with tempfile.TemporaryDirectory() as root:
         "future-fail", "Edge futura falha", "8.8.8.8", 22, "cdn-deploy",
         "SHA256:future-fail", "bootstrapping",
     )
-    rejected = queue_deployment(db, Path(root) / "releases")
+    rejected = queue_deployment(db, Path(root) / "releases", target_edge_id="future-fail")
     rejected_claim = claim_deployment(db)
     assert rejected_claim is not None and rejected_claim["id"] == rejected["deployment_id"]
     try:

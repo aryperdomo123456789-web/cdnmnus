@@ -167,6 +167,7 @@ class Database:
                     release_id TEXT NOT NULL,
                     config_digest TEXT NOT NULL,
                     artifact_path TEXT NOT NULL,
+                    target_edge_id TEXT,
                     error TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     started_at TEXT,
@@ -212,6 +213,11 @@ class Database:
                     ON promotion_requests(node_id)
                     WHERE state IN ('requested','approved','installing');
             """)
+            deployment_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(deployments)").fetchall()
+            }
+            if "target_edge_id" not in deployment_columns:
+                db.execute("ALTER TABLE deployments ADD COLUMN target_edge_id TEXT")
         try:
             os.chmod(self.path, 0o600)
         except PermissionError:
