@@ -58,7 +58,12 @@ bash -n install.sh install-from-github.sh scripts/*.sh tests/*.sh
 ! grep -RInE 'password=|BEGIN OPENSSH PRIVATE KEY|BEGIN RSA PRIVATE KEY' . --exclude-dir=.git --exclude='*.md'
 ```
 
-## Instalacao em VPS nova
+## Instalacao standalone/legada em VPS nova
+
+Este procedimento instala o proxy genérico de uma máquina isolada. Ele **não é
+o onboarding oficial de uma edge da rede multi-edge** e não deve marcar uma
+máquina como `ready`, adicioná-la ao DNS ou substituir o deployment imutável do
+control plane.
 
 Pre-requisitos: Ubuntu 20.04+ suportado, root, DNS apontando para a VPS, Git, certificados CA e acesso SSH confirmado.
 
@@ -89,6 +94,31 @@ rm -f /tmp/cdnmnus-install.sh
 ```
 
 O bootstrap recusa diretorio que nao seja clone Git e recusa worktree sujo. Ele encaminha as opcoes depois de `--` para o instalador principal.
+
+## Nova edge gerenciada e harmônica
+
+Para integrar uma edge à rede, atualize primeiro o clone Git do control plane e
+use `Mago CDN -> Edges -> Adicionar edge`. O control plane confirma fingerprint,
+cria a chave exclusiva e mantém o nó em `bootstrapping`. O worker é o único
+fluxo autorizado a aplicar a release multi-tenant:
+
+```text
+preflight-edge.yml
+-> deploy-edge.yml
+-> activate-edge.yml
+-> audit-edge-releases.yml
+-> finalize-edge-onboarding.yml
+```
+
+Somente o sucesso de todas as etapas muda os modelos legado e topológico para
+`ready`, com release/digest e eventos auditados. O `install-from-github.sh`
+continua sendo a entrada de instalação standalone e não contorna esses gates.
+
+O pacote universal gerenciado possui entrada própria:
+`install-managed-node-from-github.sh`. Ela exige tag, commit e digest do
+manifesto, recusa branches móveis e instala o contrato comum antes do
+deployment de tenant. Consulte
+[MANAGED_NODE_PACKAGE_RUNBOOK.md](MANAGED_NODE_PACKAGE_RUNBOOK.md).
 
 ## Atualizacao
 

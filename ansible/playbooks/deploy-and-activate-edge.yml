@@ -1,6 +1,15 @@
 ---
+- name: Recusar edge incompatível antes de copiar ou ativar artefatos
+  ansible.builtin.import_playbook: preflight-edge.yml
+
 - name: Sincronizar release antes da ativação
   ansible.builtin.import_playbook: deploy-edge.yml
 
 - name: Ativar runtime completo após sincronização
   ansible.builtin.import_playbook: activate-edge.yml
+
+- name: Comprovar release, serviços e health após a ativação
+  ansible.builtin.import_playbook: audit-edge-releases.yml
+
+- name: Publicar identidade local somente após todos os gates
+  ansible.builtin.import_playbook: finalize-edge-onboarding.yml

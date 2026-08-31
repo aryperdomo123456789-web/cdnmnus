@@ -1,0 +1,28 @@
+---
+- name: Validar identificador do rollback antes de construir caminho
+  ansible.builtin.assert:
+    that: load_balancer_rollback_change_id is match('^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$')
+    fail_msg: "load_balancer_rollback_change_id inválido."
+- name: Verificar artefato de rollback
+  ansible.builtin.stat:
+    path: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_rollback_change_id }}/haproxy.cfg"
+  register: lb_rollback
+- name: Exigir rollback recuperável
+  ansible.builtin.assert:
+    that: lb_rollback.stat.exists
+    fail_msg: "Configuração de rollback inexistente; nenhuma alteração foi feita."
+- name: Validar rollback antes de publicar
+  ansible.builtin.command:
+    argv: [/usr/sbin/haproxy, -c, -f, "{{ load_balancer_state_root }}/rollback/{{ load_balancer_rollback_change_id }}/haproxy.cfg"]
+  changed_when: false
+- name: Restaurar configuração validada
+  ansible.builtin.copy:
+    src: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_rollback_change_id }}/haproxy.cfg"
+    dest: "{{ load_balancer_config_path }}"
+    remote_src: true
+    owner: root
+    group: haproxy
+    mode: '0640'
+  notify: reload haproxy
+- name: Recarregar rollback agora
+  ansible.builtin.meta: flush_handlers

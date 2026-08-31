@@ -76,13 +76,17 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
     return {**manifest, "artifact_path": str(final)}
 
 
-def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh") -> dict[str, Any]:
+def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
+               include_bootstrapping: bool = False) -> dict[str, Any]:
     hosts: dict[str, Any] = {}
     known_hosts = Path(key_dir) / "known_hosts"
+    admitted_states = {"ready", "draining"}
+    if include_bootstrapping:
+        admitted_states.add("bootstrapping")
     for edge in db.edges():
-        # Provisionamento/bootstrap têm fluxo próprio. Uma release aprovada só
-        # pode alcançar nós que já passaram por esses gates.
-        if edge["state"] not in ("ready", "draining"):
+        # ``bootstrapping`` só é admitido pelo pipeline completo de onboarding,
+        # que executa preflight, ativação e auditoria antes de promover a ready.
+        if edge["state"] not in admitted_states:
             continue
         key_path = Path(key_dir) / f"{edge['id']}.ed25519"
         hosts[edge["id"]] = {
@@ -90,6 +94,10 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh") -> dict[s
             "ansible_user": "cdn-deploy", "ansible_become": True,
             "ansible_ssh_private_key_file": str(key_path),
             "ansible_ssh_common_args": f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}",
+            "cdnmnus_node_id": edge["id"],
+            "cdnmnus_node_name": edge["name"],
+            "cdnmnus_node_role": "edge",
+            "cdnmnus_node_state": "ready",
         }
     if not hosts:
         raise ValueError("nenhuma edge ready/draining para deploy")
@@ -126,11 +134,16 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
             conn.execute("UPDATE deployments SET state='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?", (error, deployment["id"]))
         raise RuntimeError(error)
     generated_inventory: Path | None = None
+    managed_edge_ids: set[str] | None = None
     if inventory is None:
         fd, generated_name = tempfile.mkstemp(prefix="cdnmnus-inventory-", suffix=".json")
         generated_inventory = Path(generated_name)
+        inventory_data = _inventory(db, key_dir, include_bootstrapping=True)
+        managed_edge_ids = set(
+            inventory_data["all"]["children"]["cdn_edges"]["hosts"]
+        )
         try:
-            os.write(fd, json.dumps(_inventory(db, key_dir)).encode())
+            os.write(fd, json.dumps(inventory_data).encode())
         finally:
             os.close(fd)
         os.chmod(generated_inventory, 0o600)
@@ -149,6 +162,12 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
                                       if any(upstream["kind"] == "vod" for upstream in item.get("upstreams", []))],
                    "tenant_health_hosts": [{"host": item["canonical_host"]} for item in tenants],
                })]
+    onboarding_edges = [
+        edge for edge in db.edges()
+        if edge["state"] == "bootstrapping"
+        and managed_edge_ids is not None
+        and edge["id"] in managed_edge_ids
+    ]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=3600, check=False)
     finally:
@@ -167,10 +186,25 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         conn.execute("UPDATE deployments SET state=?,error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",
                      (state, error, deployment["id"]))
     if result.returncode != 0:
+        for edge in onboarding_edges:
+            db.set_edge_state(
+                edge["id"], "failed", operator="deployment-worker",
+                reason="onboarding recusado por preflight, ativação ou auditoria",
+                payload={"deployment_id": deployment["id"], "release_id": deployment["release_id"]},
+            )
         raise RuntimeError(error or "deploy falhou")
     for edge in db.edges():
-        if edge["state"] in ("ready", "draining"):
-            db.set_edge_state(edge["id"], edge["state"], deployment["release_id"])
+        selected = managed_edge_ids is None or edge["id"] in managed_edge_ids
+        if edge["state"] == "bootstrapping" and managed_edge_ids is None:
+            continue
+        if selected and edge["state"] in ("bootstrapping", "ready", "draining"):
+            target_state = "ready" if edge["state"] == "bootstrapping" else edge["state"]
+            db.set_edge_state(
+                edge["id"], target_state, deployment["release_id"],
+                config_digest=deployment["config_digest"], operator="deployment-worker",
+                reason="release verificada, ativada e auditada",
+                payload={"deployment_id": deployment["id"], "release_id": deployment["release_id"]},
+            )
     return {"deployment_id": deployment["id"], "state": state,
             "release_id": deployment["release_id"], "config_digest": deployment["config_digest"],
             "artifact_path": deployment["artifact_path"]}

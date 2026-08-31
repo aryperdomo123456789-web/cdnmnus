@@ -1,0 +1,39 @@
+---
+- name: Validar contrato fail-closed do load balancer
+  ansible.builtin.assert:
+    that:
+      - load_balancer_environment in ['laboratory', 'staging', 'production']
+      - load_balancer_mode in ['standby', 'active', 'draining', 'disabled']
+      - load_balancer_haproxy_version is match('^[0-9][0-9A-Za-z.+:~_-]*$')
+      - load_balancer_change_id is match('^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$')
+      - load_balancer_public_hosts | length > 0
+      - load_balancer_backends | length > 0
+      - not load_balancer_tls_enabled | bool or load_balancer_tls_fullchain_source | length > 0
+      - not load_balancer_tls_enabled | bool or load_balancer_tls_private_key_source | length > 0
+      - not load_balancer_backend_tls | bool or load_balancer_backend_health_host | length > 0
+      - load_balancer_action not in ['promote', 'drain', 'demote', 'rollback'] or load_balancer_operation_confirm | bool
+      - load_balancer_action != 'promote' or load_balancer_mode == 'active'
+      - load_balancer_action != 'promote' or load_balancer_promotion_lease_id is match('^[a-f0-9-]{36}$')
+      - load_balancer_action != 'promote' or load_balancer_promotion_fencing_token | int > 0
+      - load_balancer_action != 'drain' or load_balancer_mode == 'draining'
+      - load_balancer_action != 'demote' or load_balancer_mode in ['standby', 'disabled']
+    fail_msg: "Configuração incompleta ou operação de estado não confirmada; DNS/firewall não são alterados."
+    quiet: true
+- name: Validar backends e isolamento do laboratório
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$')
+      - item.address | length > 0
+      - item.port | int >= 1 and item.port | int <= 65535
+      - item.state | default('ready') in ['ready', 'draining', 'disabled']
+      - item.weight | default(100) | int >= 0 and item.weight | default(100) | int <= 256
+      - load_balancer_environment != 'laboratory' or item.address in ['127.0.0.1', '::1', 'localhost']
+    fail_msg: "Backend inválido; laboratório aceita somente loopback, nunca uma edge real."
+    quiet: true
+  loop: "{{ load_balancer_backends }}"
+  loop_control:
+    label: "{{ item.name | default('backend-invalido') }}"
+- name: Validar plataforma suportada
+  ansible.builtin.assert:
+    that: ["ansible_os_family == 'Debian'", "ansible_service_mgr == 'systemd'"]
+  when: not load_balancer_skip_platform_assert | bool

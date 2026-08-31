@@ -1,0 +1,54 @@
+---
+# A versão exata é deliberadamente obrigatória. O role falha fechado quando o
+# inventário tenta instalar "latest" ou uma versão não reprodutível.
+load_balancer_haproxy_package: haproxy
+load_balancer_haproxy_version: ""
+load_balancer_change_id: ""
+load_balancer_action: preflight
+load_balancer_operation_confirm: false
+load_balancer_promotion_lease_id: ""
+load_balancer_promotion_fencing_token: 0
+load_balancer_rollback_change_id: ""
+load_balancer_drain_seconds: 30
+load_balancer_skip_platform_assert: false
+
+load_balancer_mode: standby
+load_balancer_environment: laboratory
+load_balancer_bind_address: 0.0.0.0
+load_balancer_http_port: 80
+load_balancer_https_port: 443
+load_balancer_max_connections: 20000
+load_balancer_backend_max_connections: 1000
+load_balancer_backend_slowstart: 30s
+load_balancer_health_interval: 3s
+load_balancer_health_fall: 3
+load_balancer_health_rise: 5
+
+load_balancer_tls_enabled: true
+load_balancer_tls_fullchain_source: ""
+load_balancer_tls_private_key_source: ""
+load_balancer_tls_pem_path: "/etc/haproxy/certs/{{ load_balancer_change_id }}.pem"
+load_balancer_public_hosts: []
+
+load_balancer_backend_tls: true
+load_balancer_backend_ca_file: /etc/ssl/certs/ca-certificates.crt
+load_balancer_backend_health_host: ""
+load_balancer_backends: []
+
+load_balancer_config_path: /etc/haproxy/haproxy.cfg
+load_balancer_candidate_path: /etc/haproxy/haproxy.cfg.candidate
+load_balancer_state_root: /var/lib/cdnmnus-lb
+load_balancer_runtime_socket: /run/haproxy/admin.sock
+load_balancer_stats_address: 127.0.0.1
+load_balancer_stats_port: 8404
+
+load_balancer_timeout_connect: 5s
+load_balancer_timeout_client: 1h
+load_balancer_timeout_server: 1h
+load_balancer_timeout_tunnel: 4h
+load_balancer_timeout_http_request: 10s
+load_balancer_timeout_http_keep_alive: 30s
+
+# O firewall de borda/provedor deve ser tratado por uma policy separada. O
+# role não abre portas administrativas nem altera DNS.
+load_balancer_manage_firewall: false

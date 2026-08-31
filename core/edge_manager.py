@@ -202,3 +202,30 @@ def bootstrap_edge(host: str, port: int, initial_user: str, password: str,
             del password
             gc.collect()
     return {"fingerprint": identity.sha256, "private_key": str(private_path), "ssh_user": "cdn-deploy"}
+
+
+def converge_ssh_mesh(db_path: str | Path = "/var/lib/cdnmnus-admin/admin.db",
+                      key_dir: str | Path = "/etc/cdnmnus/ssh",
+                      control_host: str | None = None) -> str:
+    """Executa o reconciliador privilegiado após cadastrar uma nova edge."""
+    if control_host is None:
+        config = Path("/etc/cdnmnus/control-plane.conf")
+        values = dict(
+            line.split("=", 1) for line in config.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        control_host = values.get("CONTROL_PLANE_HOST", "").strip()
+    control_host = _public_ipv4(control_host or "")
+    script = Path(__file__).resolve().parents[1] / "scripts/converge_ssh_mesh.py"
+    command = [str(script), "--db", str(Path(db_path).resolve()),
+               "--key-dir", str(Path(key_dir).resolve()), "--control-host", control_host]
+    if os.geteuid() != 0:
+        # O serviço privilegiado roda fora do sandbox do painel e possui
+        # ExecStart fixo; o painel não recebe sudo genérico nem argumentos root.
+        command = ["sudo", "-n", "/usr/bin/systemctl", "start", "--wait",
+                   "cdnmnus-ssh-mesh.service"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=180, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(detail[-1] if detail else "convergência da malha SSH falhou")
+    return result.stdout.strip()

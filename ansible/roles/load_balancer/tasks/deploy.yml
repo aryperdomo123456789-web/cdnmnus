@@ -1,0 +1,93 @@
+---
+- name: Instalar HAProxy exato e cliente do runtime socket
+  ansible.builtin.apt:
+    name: ["{{ load_balancer_haproxy_package }}={{ load_balancer_haproxy_version }}", socat]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Aplicar firewall do LB quando habilitado
+  ansible.builtin.include_tasks: firewall.yml
+  when: load_balancer_manage_firewall | bool
+
+- name: Criar diretórios privados
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/haproxy/certs, group: haproxy, mode: '0750'}
+    - {path: "{{ load_balancer_state_root }}", group: root, mode: '0750'}
+    - {path: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}", group: root, mode: '0700'}
+
+- name: Preservar estado edge antes de preparar o papel LB
+  ansible.builtin.command:
+    argv:
+      - tar
+      - -C
+      - /
+      - -cpf
+      - "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/edge-before.tar"
+      - etc/nginx
+      - etc/cdnmnus
+      - opt/cdnmnus/current
+      - opt/cdnmnus/current.json
+      - etc/systemd/system/cdnmnus-tenant-broker@.service
+      - etc/systemd/system/cdnmnus-vod-relay@.service
+  args:
+    creates: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/edge-before.tar"
+
+- name: Proteger backup anterior ao papel LB
+  ansible.builtin.file:
+    path: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/edge-before.tar"
+    owner: root
+    group: root
+    mode: '0600'
+- name: Instalar cadeia TLS versionada
+  ansible.builtin.copy:
+    src: "{{ load_balancer_tls_fullchain_source }}"
+    dest: "/etc/haproxy/certs/{{ load_balancer_change_id }}.01-fullchain"
+    owner: root
+    group: haproxy
+    mode: '0640'
+  when: load_balancer_tls_enabled | bool
+  no_log: true
+- name: Instalar chave TLS versionada
+  ansible.builtin.copy:
+    src: "{{ load_balancer_tls_private_key_source }}"
+    dest: "/etc/haproxy/certs/{{ load_balancer_change_id }}.02-private-key"
+    owner: root
+    group: haproxy
+    mode: '0640'
+  when: load_balancer_tls_enabled | bool
+  no_log: true
+- name: Montar PEM versionado
+  ansible.builtin.assemble:
+    src: /etc/haproxy/certs
+    regexp: "^{{ load_balancer_change_id | regex_escape }}\\.0[12]-"
+    dest: "{{ load_balancer_tls_pem_path }}"
+    owner: root
+    group: haproxy
+    mode: '0640'
+  when: load_balancer_tls_enabled | bool
+  no_log: true
+- name: Renderizar candidato sem alterar current
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: "{{ load_balancer_candidate_path }}"
+    owner: root
+    group: haproxy
+    mode: '0640'
+- name: Validar candidato antes de publicar
+  ansible.builtin.command:
+    argv: [/usr/sbin/haproxy, -c, -f, "{{ load_balancer_candidate_path }}"]
+  changed_when: false
+- name: Registrar manifesto sem segredos
+  ansible.builtin.copy:
+    content: "change_id={{ load_balancer_change_id }}\npackage_target={{ load_balancer_haproxy_version }}\ncandidate={{ load_balancer_candidate_path }}\n"
+    dest: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/manifest.txt"
+    owner: root
+    group: root
+    mode: '0600'

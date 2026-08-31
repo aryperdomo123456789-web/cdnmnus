@@ -1,0 +1,39 @@
+---
+- name: Definir política UFW de entrada do LB
+  ansible.builtin.command: ufw default deny incoming
+  changed_when: false
+
+- name: Definir política UFW de saída do LB
+  ansible.builtin.command: ufw default allow outgoing
+  changed_when: false
+
+- name: Liberar HTTP público do LB
+  ansible.builtin.command: "ufw allow {{ load_balancer_http_port }}/tcp comment 'cdnmnus-http'"
+  register: lb_ufw_http
+  changed_when: "'Skipping adding existing rule' not in lb_ufw_http.stdout"
+
+- name: Liberar HTTPS pública do LB
+  ansible.builtin.command: ufw allow 443/tcp comment 'cdnmnus-https'
+  register: lb_ufw_https
+  changed_when: "'Skipping adding existing rule' not in lb_ufw_https.stdout"
+
+- name: Liberar SSH público do LB
+  ansible.builtin.command: ufw allow 22/tcp comment 'cdnmnus-ssh'
+  register: lb_ufw_ssh
+  changed_when: "'Skipping adding existing rule' not in lb_ufw_ssh.stdout"
+
+- name: Liberar SSH interno do LB para o cluster
+  ansible.builtin.command: "ufw allow from {{ item }} to any port {{ load_balancer_ssh_port | default(22) }} proto tcp comment 'cdnmnus-ssh-cluster'"
+  loop: "{{ cdnmnus_firewall_ssh_allow_from | default([]) | unique }}"
+  register: lb_ufw_ssh_cluster
+  changed_when: true
+
+- name: Habilitar UFW no LB
+  ansible.builtin.command: ufw --force enable
+  register: lb_ufw_enable
+  changed_when: "'Firewall is active' not in lb_ufw_enable.stdout"
+
+- name: Garantir UFW do LB persistente após reboot
+  ansible.builtin.systemd_service:
+    name: ufw
+    enabled: true

@@ -1,0 +1,43 @@
+---
+- name: Operar load balancer de forma auditável
+  hosts: load_balancers
+  become: true
+  gather_facts: true
+  serial: 1
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  vars:
+    load_balancer_manage_firewall: true
+  pre_tasks:
+    - name: Ler identidade do pacote universal do nó
+      ansible.builtin.slurp:
+        src: /var/lib/cdnmnus-node/package.json
+      register: node_package_raw
+
+    - name: Exigir tag, commit e manifesto autorizados pelo control plane
+      ansible.builtin.assert:
+        that:
+          - (node_package_raw.content | b64decode | from_json).ref == expected_node_package_ref
+          - (node_package_raw.content | b64decode | from_json).commit == expected_node_package_commit
+          - (node_package_raw.content | b64decode | from_json).manifest_digest == expected_node_manifest_digest
+        quiet: true
+
+    - name: Calcular allowlist SSH a partir do inventário
+      ansible.builtin.set_fact:
+        cdnmnus_firewall_ssh_allow_from: >-
+          {{
+            (
+              (
+                groups.get('cdn_edges', [])
+                + groups.get('load_balancers', [])
+                + groups.get('control_plane', [])
+              )
+              | map('extract', hostvars, 'ansible_host')
+              | select('defined')
+              | map('string')
+              | list
+            )
+            + (cdnmnus_firewall_admin_sources | default([]))
+          }}
+  roles:
+    - load_balancer

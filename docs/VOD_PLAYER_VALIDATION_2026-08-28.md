@@ -1,5 +1,10 @@
 # Validação VOD: contrato XCIPTV/IBO Player, segurança e carga curta
 
+**Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
+Os resultados desta frente devem refletir o estado real do laboratório e das
+playlists atuais; atualize o arquivo de estado real após cada nova execução
+relevante.
+
 **Data:** 2026-08-28
 **Escopo:** canário isolado e testes determinísticos; nenhuma mudança em produção
 **Resultado:** contrato automatizado aprovado; gates reais de player, TLS e soak continuam abertos
@@ -103,3 +108,16 @@ fica apta ao pool após player real, TLS real, carga/soak e rollback passarem co
 evidências sanitizadas. Falha em seek, resposta diferente de `200/206`, vazamento
 de header/destino ou crescimento sustentado de recursos deve retirar a edge do
 pool e acionar rollback.
+
+## Atualização real de 31/08/2026
+
+O contrato automatizado foi exercitado também contra as edges reais após a
+ativação da release `20260829012407-d60cfdbf`. Em `.168` e `.170`, filme e
+série passaram em Range inicial, seek intermediário, suffix e `HEAD`; uma
+carga curta de 16 seeks concorrentes de 4 KiB por edge obteve 16/16 respostas
+`206`. Live permaneceu `200`, TLS foi validado e `.111` continuou em `206` sem
+alteração.
+
+Isso fecha o teste HTTP real e o rollback da canária, mas não equivale a executar
+XCIPTV/IBO fixados individualmente em cada IP nem fecha reprodução superior a
+três horas, carga representativa ou soak de seis horas.

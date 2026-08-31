@@ -18,6 +18,8 @@ DRY_RUN=0
 NO_FIREWALL=0
 ASSUME_YES=0
 SSH_PORT=22
+FIREWALL_PROFILE="edge"
+SSH_ALLOW_FROM=()
 WITH_PANEL=0
 PANEL_USER="mago@dono.com"
 PANEL_PASSWORD=""
@@ -54,6 +56,8 @@ Opções:
   --main-port PORTA       Porta do backend (padrão: 3000)
   --domain DOMÍNIO        server_name do Nginx (padrão: _)
   --ssh-port PORTA        Porta SSH a liberar no UFW (padrão: 22)
+  --firewall-profile P    Perfil UFW: edge ou load_balancer (padrão: edge)
+  --ssh-allow-from IP     Origem permitida para SSH restrito; pode repetir
   --with-panel            Instalar painel autenticado em localhost:9090
   --panel-user USER       Usuário inicial do painel (padrão: mago@dono.com)
   --panel-password PASS   Senha inicial; será removida do env após bootstrap
@@ -89,6 +93,16 @@ parse_args() {
       --ssh-port)
         [[ $# -ge 2 ]] || die "--ssh-port exige um valor."
         SSH_PORT="$2"
+        shift 2
+        ;;
+      --firewall-profile)
+        [[ $# -ge 2 ]] || die "--firewall-profile exige um valor."
+        FIREWALL_PROFILE="$2"
+        shift 2
+        ;;
+      --ssh-allow-from)
+        [[ $# -ge 2 ]] || die "--ssh-allow-from exige um valor."
+        SSH_ALLOW_FROM+=("$2")
         shift 2
         ;;
       --with-panel)
@@ -178,10 +192,10 @@ validate_inputs() {
   (( MAIN_PORT >= 1 && MAIN_PORT <= 65535 )) || die "A porta do backend deve estar entre 1 e 65535."
   [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || die "A porta SSH deve ser numérica."
   (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || die "A porta SSH deve estar entre 1 e 65535."
+  [[ "$FIREWALL_PROFILE" =~ ^(edge|load_balancer)$ ]] || die "Perfil de firewall inválido: $FIREWALL_PROFILE"
   if (( NO_FIREWALL == 0 )) && { (( MAIN_PORT == SSH_PORT )) || (( MAIN_PORT == 80 )) || (( MAIN_PORT == 443 )); }; then
     die "A porta do backend não pode coincidir com SSH, HTTP ou HTTPS quando o UFW está ativo."
   fi
-
   # Permite IPv4, IPv6 sem colchetes e host DNS, sem aceitar caracteres de configuração.
   [[ "$MAIN_IP" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "--main-ip contém caracteres inválidos."
   [[ "$DOMAIN" =~ ^[A-Za-z0-9.*_-]+$ ]] || die "--domain contém caracteres inválidos."
@@ -262,6 +276,10 @@ confirm_plan() {
   printf '  worker_connections:   %s\n' "$WORKER_CONNECTIONS"
   printf '  limite de arquivos:   %s\n' "$WORKER_RLIMIT_NOFILE"
   printf '  Firewall UFW:          %s\n' "$([[ $NO_FIREWALL -eq 1 ]] && printf 'não alterar' || printf 'aplicar hardening; SSH %s' "$SSH_PORT")"
+  printf '  Perfil firewall:       %s\n' "$FIREWALL_PROFILE"
+  if ((${#SSH_ALLOW_FROM[@]} > 0)); then
+    printf '  SSH allowlist:         %s\n' "${SSH_ALLOW_FROM[*]}"
+  fi
   printf '  Painel autenticado:    %s\n' "$([[ $WITH_PANEL -eq 1 ]] && printf 'instalar em 127.0.0.1:9090 (%s)' "$PANEL_USER" || printf 'não instalar')"
   printf '  Modo:                  %s\n' "$([[ $DRY_RUN -eq 1 ]] && printf 'dry-run' || printf 'instalação')"
 
@@ -365,10 +383,18 @@ run_tuning() {
 run_firewall() {
   (( NO_FIREWALL == 1 )) && { warn "UFW desativado por --no-firewall."; return; }
   local firewall="$ASSET_DIR/scripts/firewall_hardening.sh"
+  local args=(--profile "$FIREWALL_PROFILE" --backend-port "$MAIN_PORT" --ssh-port "$SSH_PORT")
+  local source
+  for source in "${SSH_ALLOW_FROM[@]}"; do
+    args+=(--ssh-allow-from "$source")
+  done
+  if [[ "$FIREWALL_PROFILE" == "load_balancer" ]]; then
+    args+=(--allow-ssh-public)
+  fi
   if (( DRY_RUN == 1 )); then
-    bash "$firewall" --dry-run --backend-port "$MAIN_PORT" --ssh-port "$SSH_PORT"
+    bash "$firewall" --dry-run "${args[@]}"
   else
-    bash "$firewall" --backend-port "$MAIN_PORT" --ssh-port "$SSH_PORT"
+    bash "$firewall" "${args[@]}"
   fi
 }
 
@@ -471,8 +497,8 @@ main() {
   render_nginx_config
   run_tuning
   deploy_nginx
-  run_firewall
   install_panel
+  run_firewall
 
   log "Instalação concluída com sucesso. Nginx está encaminhando para http://$BACKEND_SERVER."
   log "Health check local: curl -i http://127.0.0.1/nginx-health"

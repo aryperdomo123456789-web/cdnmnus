@@ -4,6 +4,14 @@
 homologação. Este documento cruza o plano solicitado com o código existente em
 28/08/2026.
 
+**Atualização operacional em 31/08/2026:** a `.111` será o primeiro load
+balancer do sistema. Ela está registrada como LB `candidate`, ainda sem
+backends, e não deve ser descrita como LB ativo. O role/playbook de HAProxy e o
+modelo `load_balancers/lb_backends` já existem em laboratório, contrariando a
+fotografia antiga abaixo. O destino `.66` permanece uma etapa posterior. Para
+estado executado, prevalece
+[STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md).
+
 **Estado operacional no momento da revisão:** as fontes `servicedovod.lat:80` e
 `zjo.lat:80` já estão cadastradas no tenant `xui-principal`, mas o deployment
 `dep-236418bec22841bca970fe4f4e8ab007` terminou em `failed` durante o Ansible.
@@ -21,23 +29,29 @@ deployment antes de qualquer teste de LB.
 | DNS | `Database.sync_dns_matrix()` | Calcula matriz local; não altera Cloudflare/provedor. |
 | Orquestração | `orchestrator/worker.py` | Executa Ansible; não gerencia pool de LB. |
 | VOD | `panel/token_broker.py` | Redirect e `Range` seguros, condicionados a `vod_hosts`. |
-| Load Balancer | nenhum role/config dedicado | **Não implementado.** |
-| Inventário | `ansible/inventories/production/hosts.yml` | Atualmente contém apenas `lb011` (`143.14.168.168`). |
+| Load Balancer | `ansible/roles/load_balancer`, `ansible/playbooks/load-balancer.yml` | Implementado e testado em laboratório; não promovido em produção. |
+| Inventário | `ansible/inventories/production/hosts.yml` | Contém `.111` candidata e as edges `.168/.170`. |
 
-O projeto tem uma base de controle e runtime de edge, mas ainda precisa de
-perfil LB, controlador de health, backup/restore e promoção edge→LB.
+O projeto tem base de controle, runtime de edge e perfil LB laboratorial, mas
+ainda precisa de promoção real da `.111`, backends, controlador operacional de
+health, backup/restore e gates de produção.
 
 ## 2. Arquitetura alvo
 
 ```text
-cliente -> cdn.phpd77.com -> LB 143.14.168.66
-                                  |-> edge 143.14.168.111
-                                  |-> edge 143.14.168.168
-                                  `-> edge 143.14.168.170
+fase 1: cliente -> cdn.phpd77.com -> LB 143.14.168.111
+                                          |-> edge 143.14.168.168
+                                          `-> edge 143.14.168.170
+
+fase 2: cliente -> cdn.phpd77.com -> LB 143.14.168.66
+                                          |-> edge 143.14.168.168
+                                          `-> edge 143.14.168.170
 ```
 
-Na virada, o DNS deve conter apenas `143.14.168.66`; as edges devem aceitar
-80/443 somente do LB. Os três A records atuais são round-robin DNS, não
+Na primeira virada, a `.111` será o LB e `.168/.170` serão seus backends. A
+`.66` permanece o destino posterior. Por decisão operacional atual, todos os
+nós mantêm `22/80/443` públicos; restringir mídia exclusivamente ao LB será um
+hardening futuro separado. Os A records atuais são round-robin DNS, não
 failover. O LB deve preservar Host/SNI, Range, respostas 206, timeouts e
 headers do broker.
 
@@ -141,7 +155,9 @@ exigir política/quorum, não ocorrer em qualquer falha isolada.
 
 ## 7. Segurança
 
-- firewall das edges permite mídia somente do LB;
+- firewall atual publica somente `22/80/443` em todos os nós; `.111` também
+  preserva `1455`;
+- todos os nós possuem acesso SSH mútuo por identidades Ed25519 individuais;
 - SSH administrativo restrito e autenticado por Ed25519;
 - tokens/chaves de assinatura idênticos entre edges, fora do Git;
 - NTP sincronizado;

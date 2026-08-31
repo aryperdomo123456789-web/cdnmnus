@@ -1,0 +1,9 @@
+---
+- name: Drenar backends sem encerrar conexões existentes
+  ansible.builtin.command:
+    argv: [socat, STDIO, "UNIX-CONNECT:{{ load_balancer_runtime_socket }}"]
+    stdin: "set server cdn_edges/{{ item.name }} state drain\n"
+  loop: "{{ load_balancer_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true

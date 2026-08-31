@@ -1,0 +1,7 @@
+---
+cdnmnus_control_plane_host: 143.14.168.111
+cdnmnus_node_role: edge
+cdnmnus_node_state: bootstrapping
+cdnmnus_node_name: "Nó {{ cdnmnus_node_id }}"
+cdnmnus_release_id: ""
+cdnmnus_config_digest: ""

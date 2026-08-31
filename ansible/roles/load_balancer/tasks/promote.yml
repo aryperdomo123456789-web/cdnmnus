@@ -1,0 +1,62 @@
+---
+- name: Verificar candidato
+  ansible.builtin.stat:
+    path: "{{ load_balancer_candidate_path }}"
+  register: lb_candidate
+- name: Exigir candidato previamente implantado
+  ansible.builtin.assert:
+    that: lb_candidate.stat.exists
+    fail_msg: "Candidato ausente; execute deploy antes de promote."
+- name: Revalidar imediatamente antes da promoção
+  ansible.builtin.command:
+    argv: [/usr/sbin/haproxy, -c, -f, "{{ load_balancer_candidate_path }}"]
+  changed_when: false
+- name: Verificar configuração atual
+  ansible.builtin.stat:
+    path: "{{ load_balancer_config_path }}"
+  register: lb_current
+
+- name: Aplicar firewall do LB quando habilitado
+  ansible.builtin.include_tasks: firewall.yml
+  when: load_balancer_manage_firewall | bool
+
+- name: Promover com restauração automática
+  block:
+    - name: Preservar configuração atual
+      ansible.builtin.copy:
+        src: "{{ load_balancer_config_path }}"
+        dest: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/haproxy.cfg"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: lb_current.stat.exists
+    - name: Publicar candidato validado
+      ansible.builtin.copy:
+        src: "{{ load_balancer_candidate_path }}"
+        dest: "{{ load_balancer_config_path }}"
+        remote_src: true
+        owner: root
+        group: haproxy
+        mode: '0640'
+      notify: reload haproxy
+    - name: Validar e recarregar agora
+      ansible.builtin.meta: flush_handlers
+  rescue:
+    - name: Restaurar configuração anterior
+      ansible.builtin.copy:
+        src: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/haproxy.cfg"
+        dest: "{{ load_balancer_config_path }}"
+        remote_src: true
+        owner: root
+        group: haproxy
+        mode: '0640'
+      when: lb_current.stat.exists
+    - name: Parar sem configuração recuperável
+      ansible.builtin.systemd:
+        name: haproxy
+        state: stopped
+        enabled: false
+      when: not lb_current.stat.exists
+    - ansible.builtin.fail:
+        msg: "Promoção falhou; estado anterior restaurado (fail-closed)."

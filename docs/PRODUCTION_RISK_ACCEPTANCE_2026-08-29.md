@@ -1,5 +1,9 @@
 # Registro de continuidade sem GPG e sem snapshot — 2026-08-29
 
+> Atualização posterior: os IDs `lb011` e `lb02` citados abaixo são evidência
+> histórica. Desde a migração numérica de 29/08/2026, correspondem aos IDs
+> técnicos `2` (`.168`) e `3` (`.170`). O alias Ansible foi preservado.
+
 ## Decisão do operador
 
 O operador decidiu continuar o plano sem assinatura GPG e sem snapshot de
@@ -97,3 +101,12 @@ Antes de ativar a candidata na `.168`:
    destino estiver disponível;
 6. executar sincronização sem ativação, auditar os sete hashes na `.168` e só
    então autorizar o bloco de ativação/rollback.
+
+## Evolução planejada: DNS e backup externos isolados
+
+A automação futura fica subordinada a
+`CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md`: Conta Cloudflare A limitada a DNS-only
+com `proxied=false`, Conta Cloudflare B limitada a um bucket R2 privado, backup
+criptografado antes do upload, Bucket Lock e restore comprovado. Essa receita
+não altera o waiver atual nem declara backup externo existente; implementação,
+credenciais, upload e restore continuam pendentes até seus gates passarem.

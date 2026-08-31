@@ -89,6 +89,61 @@
   when: item.stat.exists
   register: previous_units
 
+- name: Verificar estado observável anterior
+  ansible.builtin.stat:
+    path: /opt/cdnmnus/current.json
+  register: previous_current_json_stat
+
+- name: Criar histórico persistente da ativação
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - /var/lib/cdnmnus-edge
+    - /var/lib/cdnmnus-edge/activation-history
+    - "/var/lib/cdnmnus-edge/activation-history/{{ release_id }}"
+
+- name: Preservar units anteriores no histórico persistente
+  ansible.builtin.copy:
+    src: "/etc/systemd/system/{{ item.item }}"
+    dest: "/var/lib/cdnmnus-edge/activation-history/{{ release_id }}/{{ item.item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  loop: "{{ previous_unit_stats.results }}"
+  when: item.stat.exists
+
+- name: Preservar estado observável anterior no histórico
+  ansible.builtin.copy:
+    src: /opt/cdnmnus/current.json
+    dest: "/var/lib/cdnmnus-edge/activation-history/{{ release_id }}/current.json"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: previous_current_json_stat.stat.exists
+
+- name: Registrar contrato fechado de rollback da ativação
+  ansible.builtin.copy:
+    content: >-
+      {{ {'schema_version': 1,
+          'activated_release_id': release_id,
+          'previous_release_id': (previous_manifest.content | b64decode | from_json).release_id,
+          'previous_config_digest': (previous_manifest.content | b64decode | from_json).config_digest,
+          'tenant_broker_unit_existed': previous_unit_stats.results[0].stat.exists,
+          'vod_relay_unit_existed': previous_unit_stats.results[1].stat.exists,
+          'current_json_existed': previous_current_json_stat.stat.exists}
+         | to_nice_json }}
+    dest: "/var/lib/cdnmnus-edge/activation-history/{{ release_id }}/rollback.json"
+    owner: root
+    group: root
+    mode: '0600'
+  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+
 - name: Ativar e validar release com rollback
   block:
     - name: Apontar current atomicamente para release candidata

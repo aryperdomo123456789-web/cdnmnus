@@ -1,0 +1,153 @@
+---
+- name: Validar identidade e função do nó
+  ansible.builtin.assert:
+    that:
+      - cdnmnus_node_id | string is match('^[1-9][0-9]*$')
+      - cdnmnus_node_role in ['control_plane', 'edge', 'load_balancer']
+      - cdnmnus_node_state | length > 0
+      - cdnmnus_control_plane_host is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+    quiet: true
+
+- name: Garantir diretório de identidade do nó
+  ansible.builtin.file:
+    path: /etc/cdnmnus
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Instalar ID técnico numérico
+  ansible.builtin.copy:
+    content: "{{ cdnmnus_node_id }}\n"
+    dest: /etc/cdnmnus/node-id
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Instalar função e estado local informativo
+  ansible.builtin.copy:
+    content: "{{ {
+      'schema': 1,
+      'node_id': cdnmnus_node_id | string,
+      'name': cdnmnus_node_name,
+      'role': cdnmnus_node_role,
+      'state': cdnmnus_node_state,
+      'control_plane': {
+        'host': cdnmnus_control_plane_host,
+        'port': cdnmnus_control_plane_port | int,
+        'scheme': cdnmnus_control_plane_scheme,
+        'verify': cdnmnus_control_plane_verify | bool
+      },
+      'release_id': cdnmnus_release_id,
+      'config_digest': cdnmnus_config_digest,
+      'capabilities': {
+        'edge_runtime': true,
+        'load_balancer_candidate': true,
+        'promotion_requires_control_plane': true
+      }
+    } | to_nice_json }}\n"
+    dest: /etc/cdnmnus/node-role.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Instalar endereço do plano de controle
+  ansible.builtin.copy:
+    content: |-
+      CONTROL_PLANE_HOST={{ cdnmnus_control_plane_host }}
+      CONTROL_PLANE_PORT={{ cdnmnus_control_plane_port | int }}
+      CONTROL_PLANE_SCHEME={{ cdnmnus_control_plane_scheme }}
+      CONTROL_PLANE_VERIFY={{ 1 if (cdnmnus_control_plane_verify | bool) else 0 }}
+      NODE_BOOTSTRAP_MODE={{ cdnmnus_node_bootstrap_mode | default('managed') }}
+    dest: /etc/cdnmnus/control-plane.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Instalar cliente de menu comum
+  ansible.builtin.copy:
+    src: node_menu.py
+    dest: /usr/local/lib/cdnmnus-node-menu.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Instalar entrada comum mago-cdn
+  ansible.builtin.copy:
+    src: mago-cdn
+    dest: /usr/local/bin/mago-cdn
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Proteger executável de convergência da malha SSH no control plane
+  ansible.builtin.file:
+    path: /opt/cdnmnus/scripts/converge_ssh_mesh.py
+    owner: root
+    group: root
+    mode: '0750'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar receptor restrito de solicitação de promoção no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/submit_promotion_request.py"
+    dest: /usr/local/sbin/cdnmnus-submit-promotion-request
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Garantir usuário operacional no control plane
+  ansible.builtin.user:
+    name: cdn-deploy
+    create_home: true
+    shell: /bin/bash
+  when: cdnmnus_node_id | string == '1'
+
+- name: Garantir diretório SSH operacional no control plane
+  ansible.builtin.file:
+    path: /home/cdn-deploy/.ssh
+    state: directory
+    owner: cdn-deploy
+    group: cdn-deploy
+    mode: '0700'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Autorizar sudo operacional sem senha no control plane
+  ansible.builtin.copy:
+    content: |
+      Defaults:cdn-deploy env_keep += "SSH_CONNECTION"
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-promotion-request *
+    dest: /etc/sudoers.d/cdn-deploy
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar serviço privilegiado restrito da malha SSH
+  ansible.builtin.copy:
+    src: "{{ project_root }}/systemd/cdnmnus-ssh-mesh.service"
+    dest: /etc/systemd/system/cdnmnus-ssh-mesh.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: cdnmnus_node_id | string == '1'
+  register: ssh_mesh_service
+
+- name: Autorizar somente a convergência fixa para o painel
+  ansible.builtin.copy:
+    content: "cdn-admin ALL=(root) NOPASSWD: /usr/bin/systemctl start --wait cdnmnus-ssh-mesh.service\n"
+    dest: /etc/sudoers.d/cdnmnus-ssh-mesh
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s
+  when: cdnmnus_node_id | string == '1'
+
+- name: Recarregar systemd para o serviço da malha SSH
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - cdnmnus_node_id | string == '1'
+    - ssh_mesh_service.changed

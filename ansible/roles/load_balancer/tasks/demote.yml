@@ -1,0 +1,12 @@
+---
+- name: Drenar antes de desativar
+  ansible.builtin.include_tasks: drain.yml
+- name: Aguardar janela de drain
+  ansible.builtin.pause:
+    seconds: "{{ load_balancer_drain_seconds | int }}"
+  when: load_balancer_drain_seconds | int > 0
+- name: Desativar HAProxy
+  ansible.builtin.systemd:
+    name: haproxy
+    state: stopped
+    enabled: false

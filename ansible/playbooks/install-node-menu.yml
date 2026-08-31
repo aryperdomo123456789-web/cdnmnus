@@ -1,0 +1,11 @@
+---
+- name: Instalar menu e identidade comuns sem alterar o runtime
+  hosts: cdn_nodes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    project_root: /opt/cdnmnus
+  roles:
+    - node_menu

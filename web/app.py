@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 
 from core.db import Database, normalize_id
 from core.deploy import queue_deployment
-from core.edge_manager import bootstrap_edge, scan_host_identity
+from core.edge_manager import bootstrap_edge, converge_ssh_mesh, scan_host_identity
 from core.render_tenants import render_tenant
 
 MAX_BODY = 64 * 1024
@@ -41,7 +41,7 @@ HTML = r'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta n
 </style></head><body><div class="layout"><aside><h1>cdnmnus<br><span class="muted">Control Plane</span></h1><div class="nav">
 <button class="active" data-view="dashboard">Dashboard</button><button data-view="edges">Gerenciar Edges</button><button data-view="tenants">Gerenciar XUIs</button><button data-view="vod">Fontes VOD</button><button data-view="domains">Domínios & CNAMEs</button><button data-view="dns">DNS & Failover</button><button data-view="settings">Configuração</button></div></aside><main>
 <section id="dashboard" class="view active"><h2>Dashboard</h2><div class="grid"><div class="card stat"><strong id="nEdges">0</strong><span>Edges ready</span></div><div class="card stat"><strong id="nTenants">0</strong><span>Tenants</span></div><div class="card stat"><strong id="nDns">0</strong><span>Registros ativos</span></div></div><div class="card"><h3>Saúde das edges</h3><div id="health"></div></div></section>
-<section id="edges" class="view"><h2>Gerenciar Edges</h2><div class="two"><form class="card" id="edgeForm"><h3>Bootstrap seguro</h3><label>ID</label><input name="id" required pattern="[a-z0-9_-]+"><label>Nome</label><input name="name" required><label>IPv4 público</label><input name="ipv4" required><label>Porta SSH</label><input name="ssh_port" type="number" value="22" required><label>Usuário inicial</label><input name="ssh_user" value="root" required><label>Senha inicial (somente memória)</label><input name="password" type="password" autocomplete="new-password" required><label>Fingerprint confirmado</label><input name="fingerprint" readonly required><div class="actions"><button type="button" id="scanKey">Ler fingerprint</button><button type="submit">Confirmar e cadastrar</button></div></form><div class="card"><h3>Edges</h3><div id="edgeList"></div></div></div></section>
+<section id="edges" class="view"><h2>Gerenciar Edges</h2><div class="two"><form class="card" id="edgeForm"><h3>Preparação segura</h3><p>O ID técnico numérico será atribuído automaticamente.</p><label>Nome</label><input name="name" required><label>IPv4 público</label><input name="ipv4" required><label>Porta SSH</label><input name="ssh_port" type="number" value="22" required><label>Usuário inicial</label><input name="ssh_user" value="root" required><label>Senha inicial (somente memória)</label><input name="password" type="password" autocomplete="new-password" required><label>Fingerprint confirmado</label><input name="fingerprint" readonly required><div class="actions"><button type="button" id="scanKey">Ler fingerprint</button><button type="submit">Confirmar e cadastrar</button></div></form><div class="card"><h3>Edges</h3><div id="edgeList"></div></div></div></section>
 <section id="tenants" class="view"><h2>Gerenciar XUIs</h2><div class="two"><form class="card" id="tenantForm"><label>ID</label><input name="id" required><label>Nome</label><input name="name" required><label>Host canônico</label><input name="canonical_host" required><label>Origem</label><input name="origin_host" required><label>Porta</label><input name="origin_port" type="number" value="80" required><label>Load balancers (um por linha)</label><textarea name="load_balancers"></textarea><button type="submit">Cadastrar tenant</button></form><div class="card"><h3>Tenants e vhosts</h3><div id="tenantList"></div><pre id="vhost">Selecione “Ver vhost”.</pre></div></div></section>
 <section id="vod" class="view"><h2>Fontes VOD por XUI</h2><div class="two"><form class="card" id="vodForm"><label>Tenant/XUI</label><select name="tenant_id" id="vodTenant" required></select><label>Domínio da fonte VOD</label><input name="host" placeholder="servicedovod.lat" required pattern="[A-Za-z0-9.-]+"><label>Porta</label><input name="port" type="number" value="80" min="1" max="65535" required><p class="muted">Somente domínios autorizados. A fonte será usada para /movie/ e /series/ e redirects continuam limitados pelo broker.</p><button type="submit">Adicionar fonte VOD</button></form><div class="card"><h3>Fontes cadastradas</h3><div id="vodList"></div></div></div></section>
 <section id="domains" class="view"><h2>Domínios & CNAMEs</h2><form class="card" id="cnameForm"><label>Tenant</label><select name="tenant_id" id="tenantSelect"></select><label>Alias do cliente</label><input name="hostname" required><button type="submit">Adicionar CNAME</button></form><div class="card" id="domainList"></div></section>
@@ -141,12 +141,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"fingerprint": identity.sha256, "key_type": identity.key_type}); return
             if route == "/api/edges":
                 password = str(payload.pop("password", ""))
-                edge_id = normalize_id(str(payload.get("id", "")), "edge_id")
+                edge_id = DB.reserve_node_id()
                 result = bootstrap_edge(str(payload.get("ipv4", "")), int(payload.get("ssh_port", 22)),
                                         str(payload.get("ssh_user", "root")), password,
                                         str(payload.get("fingerprint", "")), edge_id)
                 edge = DB.add_edge(edge_id, str(payload.get("name", "")), str(payload.get("ipv4", "")),
                                    int(payload.get("ssh_port", 22)), result["ssh_user"], result["fingerprint"], "bootstrapping")
+                try:
+                    converge_ssh_mesh(DB.path)
+                except Exception:
+                    DB.set_edge_state(edge_id, "failed", operator="ssh-mesh",
+                                      reason="falha ao integrar a edge à malha SSH")
+                    raise
                 self._json(201, {"edge": edge}); return
             if route == "/api/tenants":
                 tenant = DB.add_tenant(str(payload.get("id", "")), str(payload.get("name", "")),

@@ -1,6 +1,7 @@
 # Homologação isolada do relay VOD privado
 
-**Estado:** implementação de canário; não ativada no Nginx vivo
+**Estado:** ativa em `.168/.170`; aceite funcional curto e rollback real
+aprovados em 31/08/2026; soak prolongado ainda aberto
 **Componente:** `panel/vod_relay.py`
 **Escopo:** somente `/movie/` e `/series/`
 
@@ -98,5 +99,40 @@ Antes da promoção são obrigatórios:
 6. testar rollback da release e health do relay antes de inserir a edge no pool;
 7. cadastrar a seed correta no tenant; nenhum hostname é hardcoded no código.
 
-Até esses gates fecharem, não apontar `/movie/` e `/series/` públicos para o
-relay nem promover a release VOD ao pool.
+Na fotografia original de 28/08, esses gates bloqueavam apontar `/movie/` e
+`/series/` públicos para o relay. A atualização abaixo registra a ativação
+posterior; os gates prolongados continuam bloqueando a migração para LB.
+
+## Atualização operacional de 31/08/2026
+
+A causa do `403 Assinatura inválida` foi confirmada na release antiga: o broker
+legado entregava ao Nginx uma rota interna dinâmica e o segundo parse alterava
+escapes percentuais do caminho assinado. A release
+`20260829012407-d60cfdbf` remove esse caminho dinâmico do Nginx e transmite o
+VOD no próprio relay após validar e fixar cada salto.
+
+Evidência observada diretamente em `.168` e `.170`:
+
+```text
+release/digest iguais:              PASS
+relay e broker ativos:              PASS
+nginx -t e health/TLS:              PASS
+live:                               HTTP 200
+filme e série, Range inicial:       HTTP 206
+seek intermediário e suffix:       HTTP 206
+HEAD filme e série:                HTTP 200
+16 seeks concorrentes de 4 KiB:     16/16 HTTP 206
+Location/header interno da origem:  AUSENTE
+restart do relay:                   zero
+rollback real na .168:              PASS
+reativação da candidata:          PASS
+```
+
+O rollback restaurou a release `20260829154052-a11e5eed`, sua unit antiga e a
+ausência anterior de `current.json`; cinco health consecutivos passaram e o
+`403` histórico reapareceu, comprovando a relação causal. Depois a candidata
+foi reativada e o VOD voltou a `206`.
+
+A ativação funcional foi concluída, mas continuam obrigatórios antes da
+migração para LB: player real fixado por edge, arquivo superior a três horas,
+carga representativa e soak de seis horas.

@@ -1,0 +1,17 @@
+---
+- name: Finalizar identidade de edge convergente
+  hosts: cdn_edges
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  vars:
+    project_root: /opt/cdnmnus
+  roles:
+    - role: node_menu
+      vars:
+        cdnmnus_node_role: edge
+        cdnmnus_node_state: ready
+        cdnmnus_release_id: "{{ release_id }}"
+        cdnmnus_config_digest: "{{ config_digest }}"

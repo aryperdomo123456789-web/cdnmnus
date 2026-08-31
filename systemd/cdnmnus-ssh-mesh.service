@@ -1,0 +1,17 @@
+[Unit]
+Description=Convergência da malha SSH CDNMNUS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/cdnmnus
+Environment=PYTHONPATH=/opt/cdnmnus
+ExecStart=/opt/cdnmnus/scripts/converge_ssh_mesh.py --db /var/lib/cdnmnus-admin/admin.db --key-dir /etc/cdnmnus/ssh --control-host 143.14.168.111
+TimeoutStartSec=180
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/cdn-deploy /etc/sudoers.d /etc/cdnmnus/ssh /var/lib/cdnmnus-admin
+NoNewPrivileges=false

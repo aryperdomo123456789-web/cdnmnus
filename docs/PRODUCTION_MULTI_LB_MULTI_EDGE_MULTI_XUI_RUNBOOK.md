@@ -1,5 +1,11 @@
 # Runbook mestre: VOD, multi-edge, multi-LB e multi-XUI
 
+Se você precisar de uma porta de entrada única para toda a documentação atual,
+comece por [DOCS_INDEX_AND_OPERATIONAL_RECIPE_2026-08-29.md](DOCS_INDEX_AND_OPERATIONAL_RECIPE_2026-08-29.md).
+Este runbook continua sendo a fonte de verdade da topologia e da sequência
+operacional, mas o índice organiza a leitura e conecta o código ao laboratório
+de testes.
+
 **Data-base:** 29/08/2026
 **Topologia alvo:** `.66` LB ativo, `.111` LB standby, `.168/.170` edges.
 **Regra:** preservar o tráfego atual até o substituto passar por health,
@@ -28,24 +34,30 @@ Quando documentos históricos divergirem, use esta ordem:
 
 - [x] serviços principais ativos e `nginx -t` aprovado na `.111`;
 - [x] health `200` e TLS válido nas três edges;
-- [x] `.168/.170` na release `20260828205549-34caf01e`, digest
-  `15c0af7ede46e3c8f1bb54ef275c22e046f3938baec0c2efafd0bc6bd912c2dc`;
+- [x] `.168/.170` na release `20260829012407-d60cfdbf`, digest
+  `9e5457a1dd27609a573c0fd7cbcc80db1d84378da118d7e0dc70d70d7a534eb0`;
 - [~] `.111` ainda no runtime VOD legado, sem release ativa por symlink;
-- [ ] novo relay VOD instalado no systemd;
+- [x] novo relay VOD instalado e ativo no systemd de `.168/.170`;
 - [ ] HAProxy, PostgreSQL, lease ou fencing instalados;
 - [ ] `.66` cadastrada/homologada.
 
 ### Banco e inventário
 
+**Atualização de identidade em 29/08/2026:** os IDs técnicos autoritativos são
+`1` para `.111`, `2` para `.168` e `3` para `.170`; o próximo cadastro recebe
+`4` automaticamente. `lb011`/`lb02` sobrevivem apenas como aliases Ansible/SSH
+de compatibilidade. O nó `1` está registrado `load_balancer/candidate`, sem
+promoção ou ativação.
+
 O banco possui um tenant, uma origem, um LB upstream do fornecedor, duas seeds
-VOD e apenas `.168/.170` cadastradas. As duas ainda aparecem como
-`bootstrapping`; `.111` não aparece. O inventário versionado contém somente
-`.168`, embora exista uma chave local separada para `.170`.
+VOD e apenas `.168/.170` cadastradas. As duas aparecem como `ready`, com a
+release convergente registrada; `.111` não aparece. O inventário versionado
+contém `.168` e `.170`, ambas alinhadas como `ready`.
 
 Não confunda `tenant_upstreams.kind='lb'` (LB do fornecedor/XUI) com o LB
 frontal `.66/.111`, que ainda não possui modelo no banco.
 
-### Código candidato fora de produção
+### Release VOD ativa nas edges
 
 - [x] relay Python com pinning, TLS/SNI, SSRF fail-closed e Range;
 - [x] unit por tenant;
@@ -172,13 +184,13 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 
 Aceite:
 
-- [ ] relay ativo e socket com permissões corretas;
-- [ ] `nginx -t` e cinco health `200`;
-- [ ] filme/série `200/206`, seeks e reconexão;
-- [ ] nenhum Location/token/origem/header interno;
+- [x] relay ativo e socket com permissões corretas;
+- [x] `nginx -t` e cinco health `200`;
+- [x] filme/série `200/206`, seeks e reconexão HTTP curta;
+- [x] nenhum Location/token/origem/header interno;
 - [ ] XCIPTV e IBO reais;
 - [ ] VOD superior a 3 h e soak de 6 h;
-- [ ] rollback real aprovado.
+- [x] rollback real aprovado.
 
 Rollback: o playbook reponta `current`, restaura units/serviços/configuração,
 testa Nginx e health. Nunca copie apenas `vod_relay.py`.
@@ -199,6 +211,36 @@ incompleto mantém `.168` fora do pool.
 Aceite nas duas: mesmo release ID, digest, sete hashes, snapshot, units,
 `nginx -t` e health. Falha em uma causa rollback somente nela; a outra continua
 servindo.
+
+**Estado em 31/08/2026:** `.168/.170` estão na release
+`20260829012407-d60cfdbf`, com o mesmo digest de sete artefatos, broker/relay
+ativos, `nginx -t`, health, live e VOD Range aprovados. Os estados foram
+corrigidos por transição auditada. Permanecem os gates prolongados do passo 1;
+esta convergência não autoriza sozinha a virada para a `.66`.
+
+### Contrato obrigatório para toda edge futura
+
+Toda nova edge cadastrada pelo menu entra como `bootstrapping` e participa do
+deployment gerado somente pelo modo de onboarding. O pipeline obrigatório é:
+
+```text
+preflight de capacidade/NTP/disco/conectividade
+-> cópia e verificação da release imutável
+-> ativação atômica com rollback
+-> auditoria de digest, symlink, broker, relay VOD e health
+-> instalação da identidade/menu comum
+-> transição transacional legado+topologia para ready
+```
+
+O nó deve ter pelo menos 2 vCPU, aproximadamente 4 GiB, 20% de disco livre e
+NTP sincronizado para ser aceito como edge preparada para futura evolução a
+LB. `ready` não publica DNS automaticamente. Falha em qualquer etapa deixa o nó
+fora do pool e registra `failed`; nunca se executa o instalador standalone do
+GitHub para contornar esse contrato.
+
+O arquivo local de identidade declara `load_balancer_candidate`, mas isso é
+somente capacidade. Promoção exige drain, mudança de papel auditada, role LB,
+lease/quorum, fencing e os gates específicos deste runbook.
 
 ### Passo 3 — Provar multi-XUI
 
@@ -517,6 +559,7 @@ resultado. Nunca registrar credenciais, URIs de mídia, cookies ou redirects.
 
 ## 10. Documentos subordinados
 
+- [CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md](CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md)
 - [VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md)
 - [VOD_PLAYER_VALIDATION_2026-08-28.md](VOD_PLAYER_VALIDATION_2026-08-28.md)
 - [VOD_RELAY_CANARY_RUNBOOK_2026-08-28.md](VOD_RELAY_CANARY_RUNBOOK_2026-08-28.md)

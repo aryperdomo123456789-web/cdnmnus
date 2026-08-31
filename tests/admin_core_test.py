@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 from core.db import Database
-from core.deploy import _inventory, build_release, claim_deployment, queue_deployment
+from core.deploy import _inventory, build_release, claim_deployment, queue_deployment, run_deployment
 from core.render_tenants import broker_snapshot, render_all, render_tenant
+from core.topology import TopologyStore
 
 
 with tempfile.TemporaryDirectory() as root:
@@ -46,7 +49,34 @@ with tempfile.TemporaryDirectory() as root:
     # Endereços TEST-NET não são aceitos por add_edge; insere fixture diretamente.
     with db.connect() as conn:
         conn.execute("INSERT INTO edges(id,name,ipv4,ssh_port,ssh_user,host_key_sha256,state) VALUES(?,?,?,?,?,?,?)",
-                     ("edge-a", "Edge A", "203.0.113.10", 22, "cdn-deploy", "SHA256:test", "ready"))
+                     ("edge-a", "Edge A", "203.0.113.10", 22, "cdn-deploy", "SHA256:test", "bootstrapping"))
+    db.set_edge_state("edge-a", "ready", operator="test-operator", reason="preflight aprovado",
+                      payload={"health": 200, "probe_url": "https://cdn.test/edge-health?token=secret",
+                               "api_token": "must-not-be-stored"})
+    event = db.edge_events("edge-a")[-1]
+    assert event["from_state"] == "bootstrapping" and event["to_state"] == "ready"
+    assert "?" not in event["payload_sanitized"] and "must-not-be-stored" not in event["payload_sanitized"]
+    try:
+        db.set_edge_state("edge-a", "bootstrapping", operator="test", reason="regressão inválida")
+        raise AssertionError("transição ready -> bootstrapping aceita")
+    except ValueError:
+        pass
+    assert len(db.edge_events("edge-a")) == 1
+    renamed = db.rename_edge("edge-a", "Edge São Paulo", operator="test-operator")
+    assert renamed["id"] == "edge-a" and renamed["name"] == "Edge São Paulo"
+    rename_event = next(event for event in db.edge_events("edge-a")
+                        if event["event_type"] == "edge_renamed")
+    assert rename_event["event_type"] == "edge_renamed"
+    assert '"old_name": "Edge A"' in rename_event["payload_sanitized"]
+    assert '"new_name": "Edge São Paulo"' in rename_event["payload_sanitized"]
+    db.rename_edge("edge-a", "Edge São Paulo")  # idempotente: não duplica evento
+    assert len(db.edge_events("edge-a")) == 2
+    reassigned = db.reassign_edge_id("edge-a", "2", operator="migration-test",
+                                     reason="padronização numérica")
+    assert reassigned["id"] == "2" and db.next_node_id() == "3"
+    assert any(event["event_type"] == "edge_id_reassigned" for event in db.edge_events("2"))
+    automatic_id = db.reserve_node_id()
+    assert automatic_id == "3" and db.next_node_id() == "4"
     matrix = db.sync_dns_matrix()
     assert all(item["targets"] == ["203.0.113.10"] for item in matrix)
 
@@ -55,10 +85,49 @@ with tempfile.TemporaryDirectory() as root:
     assert Path(release["artifact_path"], "manifest.json").is_file()
     assert Path(release["artifact_path"], "nginx/tenants/xui1.conf").is_file()
     inventory = _inventory(db, Path(root) / "keys")
-    assert inventory["all"]["children"]["cdn_edges"]["hosts"]["edge-a"]["ansible_user"] == "cdn-deploy"
+    assert inventory["all"]["children"]["cdn_edges"]["hosts"]["2"]["ansible_user"] == "cdn-deploy"
     queued = queue_deployment(db, Path(root) / "releases")
     claimed = claim_deployment(db)
     assert queued["state"] == "queued" and claimed is not None and claimed["id"] == queued["deployment_id"]
+
+    # Onboarding gerenciado é o único deployment que admite bootstrapping.
+    topology = TopologyStore(db)
+    topology.initialize()
+    db.add_edge(
+        "future-ok", "Edge futura OK", "1.1.1.1", 22, "cdn-deploy",
+        "SHA256:future-ok", "bootstrapping",
+    )
+    onboarding = queue_deployment(db, Path(root) / "releases")
+    onboarding_claim = claim_deployment(db)
+    assert onboarding_claim is not None and onboarding_claim["id"] == onboarding["deployment_id"]
+    with patch("core.deploy.shutil.which", return_value="/usr/bin/ansible-playbook"), patch(
+        "core.deploy.subprocess.run",
+        return_value=subprocess.CompletedProcess(["ansible-playbook"], 0, "ok", ""),
+    ):
+        run_deployment(db, onboarding_claim, key_dir=Path(root) / "ssh")
+    assert db.edge("future-ok")["state"] == "ready"
+    assert topology.node("future-ok")["state"] == "ready"
+    assert topology.node("future-ok")["release_id"] == onboarding["release_id"]
+    assert topology.node("future-ok")["node_config_digest"] == onboarding["config_digest"]
+
+    db.add_edge(
+        "future-fail", "Edge futura falha", "8.8.8.8", 22, "cdn-deploy",
+        "SHA256:future-fail", "bootstrapping",
+    )
+    rejected = queue_deployment(db, Path(root) / "releases")
+    rejected_claim = claim_deployment(db)
+    assert rejected_claim is not None and rejected_claim["id"] == rejected["deployment_id"]
+    try:
+        with patch("core.deploy.shutil.which", return_value="/usr/bin/ansible-playbook"), patch(
+            "core.deploy.subprocess.run",
+            return_value=subprocess.CompletedProcess(["ansible-playbook"], 2, "", "gate recusado"),
+        ):
+            run_deployment(db, rejected_claim, key_dir=Path(root) / "ssh")
+        raise AssertionError("onboarding falho foi aceito")
+    except RuntimeError:
+        pass
+    assert db.edge("future-fail")["state"] == "failed"
+    assert topology.node("future-fail")["state"] == "failed"
 
     try:
         db.add_cname("xui2", "cliente.test")

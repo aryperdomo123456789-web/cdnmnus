@@ -11,8 +11,28 @@
         that:
           - ansible_distribution == 'Ubuntu'
           - ansible_distribution_major_version | int >= 20
-          - ansible_memtotal_mb | int >= 1024
-          - ansible_processor_vcpus | int >= 1
+          - ansible_memtotal_mb | int >= 3500
+          - ansible_processor_vcpus | int >= 2
+          - >-
+            ((ansible_mounts | selectattr('mount', 'equalto', '/')
+              | map(attribute='size_available') | first | int)
+             / (ansible_mounts | selectattr('mount', 'equalto', '/')
+                | map(attribute='size_total') | first | int)) >= 0.20
+        quiet: true
+
+    - name: Conferir sincronismo de relógio obrigatório para tokens e promoção
+      ansible.builtin.command:
+        argv:
+          - timedatectl
+          - show
+          - --property=NTPSynchronized
+          - --value
+      register: edge_ntp_synchronized
+      changed_when: false
+
+    - name: Recusar nó com relógio não sincronizado
+      ansible.builtin.assert:
+        that: edge_ntp_synchronized.stdout | trim == 'yes'
         quiet: true
 
     - name: Conferir acesso TCP à origem XUI

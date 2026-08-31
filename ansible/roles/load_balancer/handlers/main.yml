@@ -1,0 +1,17 @@
+---
+- name: Validar HAProxy instalado
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/haproxy
+      - -c
+      - -f
+      - "{{ load_balancer_config_path }}"
+  changed_when: false
+  listen: validate haproxy
+
+- name: Recarregar HAProxy graciosamente
+  ansible.builtin.systemd:
+    name: haproxy
+    state: reloaded
+    enabled: true
+  listen: reload haproxy

@@ -35,7 +35,10 @@ pass 'perfil sysctl de máquina grande aprovado'
 
 ufw_output="$(./scripts/firewall_hardening.sh --dry-run --backend-port 3000 --ssh-port 2222)"
 grep -q 'ufw allow 2222/tcp' <<< "$ufw_output" || fail 'porta SSH customizada ausente'
-grep -q 'ufw deny 3000/tcp' <<< "$ufw_output" || fail 'negação do backend ausente'
+grep -q 'ufw default deny incoming' <<< "$ufw_output" || fail 'política default deny ausente'
+if grep -q 'ufw deny 3000/tcp' <<< "$ufw_output"; then
+  fail 'negação explícita e redundante do backend presente'
+fi
 pass 'dry-run UFW aprovado'
 
 if ./install.sh --dry-run --yes --main-ip 127.0.0.1 --main-port 443 --domain exemplo.com >/dev/null 2>&1; then

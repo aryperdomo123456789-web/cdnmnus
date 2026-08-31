@@ -95,6 +95,8 @@ jobs:
             ansible/playbooks/deploy-edge.yml \
             ansible/playbooks/activate-edge.yml \
             ansible/playbooks/deploy-and-activate-edge.yml \
+            ansible/playbooks/rollback-edge.yml \
+            ansible/playbooks/install-node-menu.yml \
             ansible/playbooks/audit-edge-releases.yml
           do
             ansible-playbook --syntax-check -i /tmp/cdnmnus-hosts.yml "$playbook" --extra-vars "$extra_vars"

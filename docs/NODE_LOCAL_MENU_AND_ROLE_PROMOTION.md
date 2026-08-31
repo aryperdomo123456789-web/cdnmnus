@@ -1,12 +1,16 @@
 # Menu local e promoção segura de nós
 
+**Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
+Atualize esse arquivo sempre que o contrato de nó, menu ou promoção mudar.
+
 ## Estado atual
 
-Hoje `cli/mago_cdn.py` é instalado no plano de controle; as edges não possuem
-necessariamente o mesmo menu. O banco (`core/db.py`) impede duplicidade de
-`id`, nome e IPv4, mas não possui função de nó (`edge`/`load_balancer`). Também
-não existe ainda uma role Ansible de Load Balancer nem uma operação real de
-promoção.
+O plano de controle possui modelo topológico de nós, eventos, locks e fencing,
+role Ansible de Load Balancer e menu local fino. O onboarding gerenciado passou
+a instalar a identidade e o menu em toda nova edge somente depois de preflight,
+release imutável, ativação e auditoria. A promoção real continua bloqueada até
+existirem lease/quorum, backends saudáveis, certificados e confirmação
+operacional.
 
 Não se deve adicionar botões que apenas alterem um texto: sem instalar HAProxy/
 Nginx LB, health controller e lock, a promoção seria falsa e poderia criar
@@ -109,7 +113,25 @@ Restrições obrigatórias:
 
 ## Instalação de uma nova edge
 
-O bootstrap deve instalar antecipadamente:
+O fluxo oficial parte de **Mago CDN → Edges → Adicionar edge** no control plane.
+O clone obtido do GitHub fornece o código versionado ao control plane; não se
+executa `install.sh` diretamente na edge para transformá-la em edge gerenciada.
+
+Após confirmar o fingerprint, a senha inicial serve apenas para criar o usuário
+`cdn-deploy` e instalar uma chave exclusiva. A máquina permanece
+`bootstrapping`. O worker então executa, serialmente e sem publicação DNS:
+
+```text
+preflight -> release imutável/digest -> edge_base -> broker/relay/Nginx
+-> health público e privado -> auditoria integral -> identidade/menu -> ready
+```
+
+O preflight recusa menos de 2 vCPU, aproximadamente 4 GiB, reserva de disco
+inferior a 20%, relógio sem NTP, origem inacessível ou LB upstream inacessível.
+A auditoria recusa hash divergente, symlink/estado divergente, broker parado,
+relay VOD parado, socket VOD sem health ou hostname sem health `200`.
+
+O bootstrap instala antecipadamente:
 
 - `mago-cdn` e dependências do menu;
 - agente de health e coleta de métricas;
@@ -118,8 +140,14 @@ O bootstrap deve instalar antecipadamente:
 - pacote de recuperação local;
 - role edge pronta, mas sem publicação DNS até `ready`.
 
-Também deve instalar o kit de promoção LB, porém mantê-lo bloqueado até o
-control plane autorizar a operação.
+Também grava a capacidade `load_balancer_candidate` e instala os pré-requisitos
+comuns. HAProxy não é iniciado numa edge: a role central de LB permanece
+bloqueada até o control plane autorizar drain, mudança de papel e promoção.
+
+Cadastro e mudança de estado são transacionais nos modelos legado e topológico.
+Falha em qualquer gate deixa a máquina fora de `ready` e, portanto, fora da
+matriz DNS. A transição bem-sucedida registra a mesma release e digest nos dois
+modelos com eventos auditáveis.
 
 ## Sincronismo
 
@@ -133,16 +161,17 @@ cópia entre VPS. Em indisponibilidade do control plane, o menu local pode
 
 mas não deve promover dois nós nem alterar DNS sem lease válida.
 
-## Implementação necessária no repositório
+## Implementação e gates remanescentes
 
-1. Migração DB para `nodes`, `node_events` e `promotion_locks`.
-2. Role `load_balancer` e playbooks de promoção/rebaixamento.
-3. Instalação do CLI em todas as edges durante `edge_base`.
-4. Detecção/arquivo de função do nó e cabeçalho do menu.
-5. Operações `promote`, `demote`, `drain` e `stop` com API autoritativa.
-6. Controlador de health e lease/quorum.
-7. Backup/restore assinado e rollback.
-8. Testes de duplicidade, split-brain, falha de LB e recuperação.
+1. [x] Migração DB para `nodes`, `node_events` e `promotion_locks`.
+2. [x] Role `load_balancer` com preflight, deploy, drain, promoção e rollback.
+3. [x] Instalação do menu/identidade em toda edge após auditoria.
+4. [x] Cadastro e estados legado/topológico na mesma transação.
+5. [x] Release, VOD relay, rollback e auditoria fail-closed.
+6. [ ] Controlador externo de lease/quorum e fencing de produção.
+7. [ ] Pacote de recuperação assinado e restore completo comprovado.
+8. [ ] Promoção/rebaixamento real pelo menu após os gates de produção.
 
-Até esses itens serem implementados, o menu deve exibir promoção como
-“indisponível — role LB não instalada”, nunca simular uma transformação.
+Enquanto os três itens abertos não forem comprovados, o menu deve manter a
+promoção indisponível; possuir capacidade de candidato não simula mudança de
+papel nem inicia HAProxy.

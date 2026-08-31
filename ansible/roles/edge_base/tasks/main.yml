@@ -7,6 +7,7 @@
       - ca-certificates
       - curl
       - python3
+      - socat
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -50,19 +51,30 @@
   ansible.builtin.command: ufw default allow outgoing
   changed_when: false
 
-- name: Liberar portas públicas e SSH
-  ansible.builtin.command: "ufw allow {{ item.port }}/tcp comment '{{ item.comment }}'"
-  loop:
-    - {port: 22, comment: cdnmnus-ssh}
-    - {port: 80, comment: cdnmnus-http}
-    - {port: 443, comment: cdnmnus-https}
-  register: ufw_rules
-  changed_when: "'Skipping adding existing rule' not in ufw_rules.stdout"
+- name: Liberar HTTP público da CDN
+  ansible.builtin.command: ufw allow 80/tcp comment 'cdnmnus-http'
+  register: edge_ufw_http
+  changed_when: "'Skipping adding existing rule' not in edge_ufw_http.stdout"
+
+- name: Liberar SSH público da edge
+  ansible.builtin.command: "ufw allow {{ cdnmnus_firewall_ssh_port | default(22) }}/tcp comment 'cdnmnus-ssh'"
+  register: edge_ufw_ssh_public
+  changed_when: "'Skipping adding existing rule' not in edge_ufw_ssh_public.stdout"
+
+- name: Liberar HTTPS pública
+  ansible.builtin.command: ufw allow 443/tcp comment 'cdnmnus-https'
+  register: edge_ufw_https
+  changed_when: "'Skipping adding existing rule' not in edge_ufw_https.stdout"
 
 - name: Habilitar UFW
   ansible.builtin.command: ufw --force enable
   register: ufw_enable
   changed_when: "'Firewall is active' not in ufw_enable.stdout"
+
+- name: Garantir UFW persistente após reboot
+  ansible.builtin.systemd_service:
+    name: ufw
+    enabled: true
 
 - name: Garantir diretórios da CDN
   ansible.builtin.file:

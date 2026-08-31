@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+node_role=""
+if [[ -r /etc/cdnmnus/node-role.json ]]; then
+  node_role="$(python3 -c 'import json; print(json.load(open("/etc/cdnmnus/node-role.json")).get("role", ""))' 2>/dev/null || true)"
+fi
+
+if [[ -f /opt/cdnmnus/cli/mago_cdn.py && -f /var/lib/cdnmnus-admin/admin.db ]]; then
+  export PYTHONPATH="/opt/cdnmnus${PYTHONPATH:+:${PYTHONPATH}}"
+  export CDNMNUS_ADMIN_DB="${CDNMNUS_ADMIN_DB:-/var/lib/cdnmnus-admin/admin.db}"
+  exec /opt/cdnmnus/venv/bin/python3 /opt/cdnmnus/cli/mago_cdn.py "$@"
+fi
+
+exec /usr/bin/python3 /usr/local/lib/cdnmnus-node-menu.py "$@"

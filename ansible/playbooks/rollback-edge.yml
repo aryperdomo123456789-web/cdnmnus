@@ -1,0 +1,248 @@
+---
+- name: Validar alvo explícito de rollback sem alterar a edge
+  hosts: cdn_edges
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  tasks:
+    - name: Exigir identidades fechadas do estado atual e do rollback
+      ansible.builtin.assert:
+        that:
+          - expected_current_release_id is match('^[0-9]{14}-[a-f0-9]{8}$')
+          - release_id is match('^[0-9]{14}-[a-f0-9]{8}$')
+          - config_digest is match('^[a-f0-9]{64}$')
+          - release_id != expected_current_release_id
+        fail_msg: Identidades de rollback ausentes, malformadas ou iguais.
+        quiet: true
+
+    - name: Resolver release ativa antes do rollback
+      ansible.builtin.command: readlink -f /opt/cdnmnus/current
+      register: rollback_current
+      changed_when: false
+
+    - name: Recusar rollback sobre estado ativo inesperado
+      ansible.builtin.assert:
+        that:
+          - rollback_current.stdout == '/opt/cdnmnus/releases/' + expected_current_release_id
+        fail_msg: A release ativa mudou desde a autorização; rollback recusado.
+        quiet: true
+
+    - name: Validar integralmente a release de destino já sincronizada
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/cdnmnus-verify-release
+          - "/opt/cdnmnus/releases/{{ release_id }}"
+          - "{{ release_id }}"
+          - "{{ config_digest }}"
+      changed_when: false
+
+    - name: Ler contrato persistente da ativação atual
+      ansible.builtin.slurp:
+        src: "/var/lib/cdnmnus-edge/activation-history/{{ expected_current_release_id }}/rollback.json"
+      register: rollback_contract_raw
+
+    - name: Decodificar contrato persistente de rollback
+      ansible.builtin.set_fact:
+        rollback_contract: "{{ rollback_contract_raw.content | b64decode | from_json }}"
+
+    - name: Recusar rollback para release diferente da preservada
+      ansible.builtin.assert:
+        that:
+          - rollback_contract.schema_version | int == 1
+          - rollback_contract.activated_release_id == expected_current_release_id
+          - rollback_contract.previous_release_id == release_id
+          - rollback_contract.previous_config_digest == config_digest
+        fail_msg: O histórico persistente não corresponde ao rollback solicitado.
+        quiet: true
+
+    - name: Ler snapshot da release de rollback
+      ansible.builtin.slurp:
+        src: "/opt/cdnmnus/releases/{{ release_id }}/broker/tenants.json"
+      register: rollback_snapshot_raw
+
+    - name: Calcular serviços exatos da release de rollback
+      ansible.builtin.set_fact:
+        rollback_tenant_ids: >-
+          {{ (rollback_snapshot_raw.content | b64decode | from_json).tenants.keys() | list }}
+        rollback_vod_tenant_ids: >-
+          {{ ((rollback_snapshot_raw.content | b64decode | from_json).tenants | dict2items)
+             | selectattr('value.vod_hosts', 'defined')
+             | rejectattr('value.vod_hosts', 'equalto', [])
+             | map(attribute='key') | list
+             if rollback_contract.vod_relay_unit_existed else [] }}
+
+    - name: Executar rollback transacional com recuperação da candidata
+      block:
+        - name: Parar relays da candidata
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-vod-relay@{{ item }}.service"
+            enabled: false
+            state: stopped
+          loop: "{{ vod_tenant_ids | default([]) }}"
+          failed_when: false
+
+        - name: Parar brokers da candidata
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-tenant-broker@{{ item }}.service"
+            enabled: false
+            state: stopped
+          loop: "{{ tenant_ids }}"
+          failed_when: false
+
+        - name: Reapontar current atomicamente para a release anterior
+          ansible.builtin.shell:
+            cmd: >-
+              set -eu;
+              ln -sfn '/opt/cdnmnus/releases/{{ release_id }}' /opt/cdnmnus/.current-rollback;
+              mv -Tf /opt/cdnmnus/.current-rollback /opt/cdnmnus/current
+            executable: /bin/sh
+          changed_when: true
+
+        - name: Restaurar unit anterior do broker
+          ansible.builtin.copy:
+            src: "/var/lib/cdnmnus-edge/activation-history/{{ expected_current_release_id }}/cdnmnus-tenant-broker@.service"
+            dest: /etc/systemd/system/cdnmnus-tenant-broker@.service
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+          when: rollback_contract.tenant_broker_unit_existed
+
+        - name: Remover unit do broker ausente no estado anterior
+          ansible.builtin.file:
+            path: /etc/systemd/system/cdnmnus-tenant-broker@.service
+            state: absent
+          when: not rollback_contract.tenant_broker_unit_existed
+
+        - name: Restaurar unit anterior do relay VOD
+          ansible.builtin.copy:
+            src: "/var/lib/cdnmnus-edge/activation-history/{{ expected_current_release_id }}/cdnmnus-vod-relay@.service"
+            dest: /etc/systemd/system/cdnmnus-vod-relay@.service
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+          when: rollback_contract.vod_relay_unit_existed
+
+        - name: Remover unit do relay ausente no estado anterior
+          ansible.builtin.file:
+            path: /etc/systemd/system/cdnmnus-vod-relay@.service
+            state: absent
+          when: not rollback_contract.vod_relay_unit_existed
+
+        - name: Recarregar systemd com as units restauradas
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Iniciar brokers exatos da release anterior
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-tenant-broker@{{ item }}.service"
+            enabled: true
+            state: started
+          loop: "{{ rollback_tenant_ids }}"
+
+        - name: Iniciar relays existentes na release anterior
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-vod-relay@{{ item }}.service"
+            enabled: true
+            state: started
+          loop: "{{ rollback_vod_tenant_ids }}"
+
+        - name: Validar Nginx antes de recarregar o rollback
+          ansible.builtin.command: nginx -t
+          changed_when: false
+
+        - name: Recarregar Nginx com a release anterior
+          ansible.builtin.systemd_service:
+            name: nginx
+            state: reloaded
+
+        - name: Restaurar estado observável anterior
+          ansible.builtin.copy:
+            src: "/var/lib/cdnmnus-edge/activation-history/{{ expected_current_release_id }}/current.json"
+            dest: /opt/cdnmnus/current.json
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+          when: rollback_contract.current_json_existed
+
+        - name: Remover estado observável inexistente antes da ativação
+          ansible.builtin.file:
+            path: /opt/cdnmnus/current.json
+            state: absent
+          when: not rollback_contract.current_json_existed
+      rescue:
+        - name: Restaurar symlink da candidata após falha no rollback
+          ansible.builtin.shell:
+            cmd: >-
+              set -eu;
+              ln -sfn '/opt/cdnmnus/releases/{{ expected_current_release_id }}' /opt/cdnmnus/.current-recovery;
+              mv -Tf /opt/cdnmnus/.current-recovery /opt/cdnmnus/current
+            executable: /bin/sh
+          changed_when: true
+
+        - name: Reinstalar units da candidata
+          ansible.builtin.copy:
+            src: "/opt/cdnmnus/current/runtime/{{ item }}"
+            dest: "/etc/systemd/system/{{ item }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - cdnmnus-tenant-broker@.service
+            - cdnmnus-vod-relay@.service
+
+        - name: Recarregar systemd após recuperar a candidata
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Reiniciar brokers da candidata recuperada
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-tenant-broker@{{ item }}.service"
+            enabled: true
+            state: restarted
+          loop: "{{ tenant_ids }}"
+
+        - name: Reiniciar relays da candidata recuperada
+          ansible.builtin.systemd_service:
+            name: "cdnmnus-vod-relay@{{ item }}.service"
+            enabled: true
+            state: restarted
+          loop: "{{ vod_tenant_ids | default([]) }}"
+
+        - name: Revalidar e recarregar Nginx da candidata recuperada
+          ansible.builtin.shell:
+            cmd: nginx -t && systemctl reload nginx
+            executable: /bin/sh
+          changed_when: true
+
+        - name: Encerrar rollback recusado após recuperar a candidata
+          ansible.builtin.fail:
+            msg: Rollback falhou; a release candidata foi restaurada.
+
+- name: Confirmar rollback com verificações consecutivas
+  hosts: cdn_edges
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Revalidar sintaxe Nginx após rollback
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Exigir cinco health checks consecutivos por tenant
+      ansible.builtin.uri:
+        url: https://127.0.0.1/edge-health
+        headers:
+          Host: "{{ item.0.host }}"
+        validate_certs: false
+        status_code: 200
+      loop: "{{ tenant_health_hosts | product(range(5)) | list }}"
+      loop_control:
+        label: "{{ item.0.host }} check={{ item.1 + 1 }}"
+      changed_when: false

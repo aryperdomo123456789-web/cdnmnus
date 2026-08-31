@@ -9,7 +9,26 @@
     project_root: /opt/cdnmnus
     tls_fullchain_source: "/var/lib/cdnmnus-admin/tls-source/fullchain.pem"
     tls_privkey_source: "/var/lib/cdnmnus-admin/tls-source/privkey.pem"
+  pre_tasks:
+    - name: Calcular allowlist SSH a partir do inventário
+      ansible.builtin.set_fact:
+        cdnmnus_firewall_ssh_allow_from: >-
+          {{
+            (
+              (
+                groups.get('cdn_edges', [])
+                + groups.get('load_balancers', [])
+                + groups.get('control_plane', [])
+              )
+              | map('extract', hostvars, 'ansible_host')
+              | select('defined')
+              | map('string')
+              | list
+            )
+            + (cdnmnus_firewall_admin_sources | default([]))
+          }}
   roles:
-    - edge_base
+    - role: edge_base
+      when: not (rollback_mode | default(false) | bool)
     - cdn_runtime
     - cdn_tenants

@@ -1,0 +1,10 @@
+---
+- name: Validar ação solicitada
+  ansible.builtin.assert:
+    that: load_balancer_action in ['preflight', 'deploy', 'promote', 'drain', 'demote', 'rollback']
+    fail_msg: "Ação de load balancer inválida."
+- name: Executar preflight fail-closed
+  ansible.builtin.include_tasks: preflight.yml
+- name: Executar ação do load balancer
+  ansible.builtin.include_tasks: "{{ load_balancer_action }}.yml"
+  when: load_balancer_action != 'preflight'

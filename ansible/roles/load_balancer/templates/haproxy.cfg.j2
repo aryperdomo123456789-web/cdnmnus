@@ -1,0 +1,74 @@
+# Gerado pelo CDNMenus. Não editar manualmente.
+# change_id={{ load_balancer_change_id }} mode={{ load_balancer_mode }}
+global
+    log /dev/log local0
+    chroot /var/lib/haproxy
+    stats socket {{ load_balancer_runtime_socket }} mode 0660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    maxconn {{ load_balancer_max_connections }}
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+    ssl-default-server-options ssl-min-ver TLSv1.2
+
+defaults
+    mode http
+    log global
+    option dontlognull
+    option http-keep-alive
+    option forwardfor
+    timeout connect {{ load_balancer_timeout_connect }}
+    timeout client {{ load_balancer_timeout_client }}
+    timeout server {{ load_balancer_timeout_server }}
+    timeout tunnel {{ load_balancer_timeout_tunnel }}
+    timeout http-request {{ load_balancer_timeout_http_request }}
+    timeout http-keep-alive {{ load_balancer_timeout_http_keep_alive }}
+    # Deliberadamente sem %r, %HU, query string, cookies ou Authorization.
+    log-format "client=%ci:%cp frontend=%ft backend=%b server=%s method=%HM host=%[var(txn.safe_host)] status=%ST bytes=%B timers=%TR/%Tw/%Tc/%Tr/%Ta term=%tsc"
+
+frontend cdn_http
+    bind {{ load_balancer_bind_address }}:{{ load_balancer_http_port }}
+    monitor-uri /lb-health
+    http-request set-var(txn.safe_host) req.hdr(host),field(1,:),lower
+    acl allowed_host var(txn.safe_host) -i {{ load_balancer_public_hosts | join(' ') }}
+    http-request deny deny_status 421 unless allowed_host
+    http-request del-header X-CDNMenus-Backend
+    http-request del-header X-CDNMenus-Origin
+{% if load_balancer_tls_enabled %}
+    http-request redirect scheme https code 308
+{% else %}
+    default_backend cdn_edges
+{% endif %}
+
+{% if load_balancer_tls_enabled %}
+frontend cdn_https
+    bind {{ load_balancer_bind_address }}:{{ load_balancer_https_port }} ssl crt {{ load_balancer_tls_pem_path }} strict-sni alpn h2,http/1.1
+    monitor-uri /lb-health
+    http-request set-var(txn.safe_host) req.hdr(host),field(1,:),lower
+    acl allowed_host var(txn.safe_host) -i {{ load_balancer_public_hosts | join(' ') }}
+    http-request deny deny_status 421 unless allowed_host
+    http-request del-header X-CDNMenus-Backend
+    http-request del-header X-CDNMenus-Origin
+    http-request set-header X-Forwarded-Proto https
+    default_backend cdn_edges
+{% endif %}
+
+backend cdn_edges
+    balance source
+    hash-type consistent
+    option httpchk
+    http-check send meth GET uri /edge-health ver HTTP/1.1 hdr Host {{ load_balancer_backend_health_host or load_balancer_public_hosts[0] }} hdr Connection close
+    http-check expect status 200
+    http-response del-header Server
+    http-response del-header X-Powered-By
+{% for backend in load_balancer_backends %}
+    server {{ backend.name }} {{ backend.address }}:{{ backend.port }} check inter {{ load_balancer_health_interval }} fall {{ load_balancer_health_fall }} rise {{ load_balancer_health_rise }} slowstart {{ load_balancer_backend_slowstart }} maxconn {{ backend.maxconn | default(load_balancer_backend_max_connections) }} weight {{ backend.weight | default(100) }}{% if load_balancer_backend_tls %} ssl verify required ca-file {{ load_balancer_backend_ca_file }} sni var(txn.safe_host) check-sni {{ load_balancer_backend_health_host }}{% endif %}{% if load_balancer_mode == 'draining' or backend.state | default('ready') in ['draining', 'disabled'] %} disabled{% endif %}
+{% endfor %}
+
+listen cdn_stats_local
+    bind {{ load_balancer_stats_address }}:{{ load_balancer_stats_port }}
+    stats enable
+    stats uri /stats
+    stats hide-version
+    http-request deny unless { src 127.0.0.0/8 ::1 }

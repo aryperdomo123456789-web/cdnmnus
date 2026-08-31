@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from core.db import Database, normalize_id
 from core.deploy import deploy_serial
-from core.edge_manager import bootstrap_edge, scan_host_identity
+from core.edge_manager import bootstrap_edge, converge_ssh_mesh, scan_host_identity
 from core.render_tenants import render_tenant
 
 
@@ -41,7 +41,7 @@ def print_table(headers: list[str], rows: list[list[object]]) -> None:
 
 def edge_add(args: argparse.Namespace, db: Database) -> None:
     name = ask(args.name, "Nome da edge")
-    edge_id = normalize_id(args.id or name.lower().replace(" ", "-"), "edge_id")
+    edge_id = normalize_id(args.id, "edge_id") if args.id else db.reserve_node_id()
     ipv4 = ask(args.ipv4, "IPv4 público")
     port = int(ask(str(args.port) if args.port else None, "Porta SSH", "22"))
     user = ask(args.user, "Usuário inicial", "root")
@@ -57,6 +57,12 @@ def edge_add(args: argparse.Namespace, db: Database) -> None:
         password = ""
         del password
     db.add_edge(edge_id, name, ipv4, port, result["ssh_user"], result["fingerprint"], "bootstrapping")
+    try:
+        converge_ssh_mesh(db.path)
+    except Exception:
+        db.set_edge_state(edge_id, "failed", operator="ssh-mesh",
+                          reason="falha ao integrar a edge à malha SSH")
+        raise
     print(f"Edge {edge_id} em bootstrap; autenticação recorrente por chave Ed25519 validada.")
 
 

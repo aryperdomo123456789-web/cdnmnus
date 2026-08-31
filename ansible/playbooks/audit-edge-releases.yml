@@ -44,14 +44,68 @@
           - "{{ edge_current.config_digest }}"
       changed_when: false
 
+    - name: Ler snapshot imutável da release ativa
+      ansible.builtin.slurp:
+        src: /opt/cdnmnus/current/broker/tenants.json
+      register: audit_snapshot_raw
+
+    - name: Derivar hosts de health do snapshot ativo
+      ansible.builtin.set_fact:
+        audit_health_hosts: >-
+          {{ (audit_snapshot_raw.content | b64decode | from_json).tenants
+             | dict2items | map(attribute='value.public_hosts') | flatten | unique | list }}
+        audit_tenant_ids: >-
+          {{ (audit_snapshot_raw.content | b64decode | from_json).tenants.keys() | list }}
+        audit_vod_tenant_ids: >-
+          {{ ((audit_snapshot_raw.content | b64decode | from_json).tenants | dict2items)
+             | selectattr('value.vod_hosts', 'defined')
+             | rejectattr('value.vod_hosts', 'equalto', [])
+             | map(attribute='key') | list }}
+
+    - name: Recusar release sem hostname público auditável
+      ansible.builtin.assert:
+        that: audit_health_hosts | length > 0
+        quiet: true
+
+    - name: Exigir broker ativo para cada tenant
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "cdnmnus-tenant-broker@{{ item }}.service"
+      loop: "{{ audit_tenant_ids }}"
+      changed_when: false
+
+    - name: Exigir relay VOD ativo para cada tenant com VOD
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "cdnmnus-vod-relay@{{ item }}.service"
+      loop: "{{ audit_vod_tenant_ids }}"
+      changed_when: false
+
+    - name: Validar health privado de cada relay VOD
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --fail
+          - --unix-socket
+          - "/run/cdnmnus/vod-relay-{{ item }}.sock"
+          - http://localhost/health
+      loop: "{{ audit_vod_tenant_ids }}"
+      changed_when: false
+
     - name: Validar health local de cada tenant
       ansible.builtin.uri:
         url: https://127.0.0.1/edge-health
         headers:
-          Host: "{{ item.host }}"
+          Host: "{{ item }}"
         validate_certs: false
         status_code: 200
-      loop: "{{ tenant_health_hosts }}"
+      loop: "{{ audit_health_hosts }}"
       changed_when: false
 
     - name: Expor identidade comprovada da edge
