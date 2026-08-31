@@ -47,7 +47,11 @@ def main() -> int:
     args = parser.parse_args()
     if os.geteuid() != 0 or not args.confirm:
         raise PermissionError("execução exige root e --confirm")
-    if shutil.which("ansible-playbook") is None:
+    ansible_playbook = shutil.which("ansible-playbook")
+    project_ansible = ROOT / "venv/bin/ansible-playbook"
+    if ansible_playbook is None and project_ansible.is_file():
+        ansible_playbook = str(project_ansible)
+    if ansible_playbook is None:
         raise RuntimeError("ansible-playbook ausente")
     config = load_config(args.config.resolve())
     database = Database(args.db); database.initialize(); TopologyStore(database).initialize()
@@ -120,7 +124,7 @@ def main() -> int:
             vars_path.write_text(json.dumps(extra), encoding="utf-8")
             os.chmod(inventory_path, 0o600); os.chmod(vars_path, 0o600)
             result = subprocess.run(
-                ["ansible-playbook", "-i", str(inventory_path),
+                [ansible_playbook, "-i", str(inventory_path),
                  str(ROOT / "ansible/playbooks/load-balancer.yml"),
                  "--extra-vars", "@" + str(vars_path)],
                 cwd=ROOT, capture_output=True, text=True, timeout=1800, check=False,
