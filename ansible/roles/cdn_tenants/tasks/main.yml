@@ -62,17 +62,39 @@
   changed_when: false
   failed_when: false
 
+- name: Verificar manifesto da release anterior
+  ansible.builtin.stat:
+    path: "{{ previous_release.stdout }}/manifest.json"
+  register: previous_manifest_stat
+  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+
+- name: Verificar snapshot da release anterior
+  ansible.builtin.stat:
+    path: "{{ previous_release.stdout }}/broker/tenants.json"
+  register: previous_snapshot_stat
+  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+
+- name: Definir se existe rollback anterior íntegro
+  ansible.builtin.set_fact:
+    previous_release_valid: >-
+      {{
+        previous_release.rc == 0
+        and previous_release.stdout | length > 0
+        and previous_manifest_stat.stat.exists | default(false)
+        and previous_snapshot_stat.stat.exists | default(false)
+      }}
+
 - name: Ler manifesto da release anterior para rollback observável
   ansible.builtin.slurp:
     src: "{{ previous_release.stdout }}/manifest.json"
   register: previous_manifest
-  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+  when: previous_release_valid | bool
 
 - name: Ler snapshot anterior para restaurar exatamente seus brokers
   ansible.builtin.slurp:
     src: "{{ previous_release.stdout }}/broker/tenants.json"
   register: previous_snapshot
-  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+  when: previous_release_valid | bool
 
 - name: Descobrir units instaladas antes da ativação
   ansible.builtin.stat:
@@ -142,7 +164,7 @@
     owner: root
     group: root
     mode: '0600'
-  when: previous_release.rc == 0 and previous_release.stdout | length > 0
+  when: previous_release_valid | bool
 
 - name: Ativar e validar release com rollback
   block:
@@ -295,7 +317,7 @@
           ln -sfn '{{ previous_release.stdout }}' /opt/cdnmnus/.current-rollback;
           mv -Tf /opt/cdnmnus/.current-rollback /opt/cdnmnus/current
         executable: /bin/sh
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Restaurar conteúdo das units que existiam
       ansible.builtin.copy:
@@ -324,7 +346,7 @@
         enabled: false
         state: stopped
       loop: "{{ tenant_ids }}"
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Parar relays VOD da release candidata antes do rollback
       ansible.builtin.systemd_service:
@@ -332,7 +354,7 @@
         enabled: false
         state: stopped
       loop: "{{ vod_tenant_ids | default([]) }}"
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Iniciar exatamente os brokers do snapshot anterior
       ansible.builtin.systemd_service:
@@ -340,7 +362,7 @@
         enabled: true
         state: started
       loop: "{{ (previous_snapshot.content | b64decode | from_json).tenants.keys() | list }}"
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Iniciar exatamente os relays VOD do snapshot anterior
       ansible.builtin.systemd_service:
@@ -352,7 +374,7 @@
            | selectattr('value.vod_hosts', 'defined')
            | rejectattr('value.vod_hosts', 'equalto', [])
            | map(attribute='key') | list }}
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Restaurar estado verificável anterior
       ansible.builtin.copy:
@@ -365,19 +387,19 @@
         owner: root
         group: root
         mode: '0644'
-      when: previous_release.rc == 0 and previous_release.stdout | length > 0
+      when: previous_release_valid | bool
 
     - name: Remover include quando não havia release anterior
       ansible.builtin.file:
         path: /etc/nginx/conf.d/98-cdnmnus-tenants.conf
         state: absent
-      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+      when: not (previous_release_valid | bool)
 
     - name: Remover symlink candidato quando não havia release anterior
       ansible.builtin.file:
         path: /opt/cdnmnus/current
         state: absent
-      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+      when: not (previous_release_valid | bool)
 
     - name: Parar brokers candidatos quando não havia release anterior
       ansible.builtin.systemd_service:
@@ -385,7 +407,7 @@
         enabled: false
         state: stopped
       loop: "{{ tenant_ids }}"
-      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+      when: not (previous_release_valid | bool)
 
     - name: Parar relays VOD candidatos quando não havia release anterior
       ansible.builtin.systemd_service:
@@ -393,13 +415,13 @@
         enabled: false
         state: stopped
       loop: "{{ vod_tenant_ids | default([]) }}"
-      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+      when: not (previous_release_valid | bool)
 
     - name: Remover estado saudável quando não havia release anterior
       ansible.builtin.file:
         path: /opt/cdnmnus/current.json
         state: absent
-      when: previous_release.rc != 0 or previous_release.stdout | length == 0
+      when: not (previous_release_valid | bool)
 
     - name: Validar e recarregar configuração restaurada
       ansible.builtin.shell: nginx -t && systemctl reload nginx

@@ -95,6 +95,10 @@ with tempfile.TemporaryDirectory() as temp_name:
     )
     assert "Registrar contrato fechado de rollback da ativação" in rollback_tasks
     assert "/var/lib/cdnmnus-edge/activation-history/{{ release_id }}/rollback.json" in rollback_tasks
+    assert "Definir se existe rollback anterior íntegro" in rollback_tasks
+    assert "previous_manifest_stat.stat.exists" in rollback_tasks
+    assert "previous_snapshot_stat.stat.exists" in rollback_tasks
+    assert "when: not (previous_release_valid | bool)" in rollback_tasks
 
     explicit_rollback = ROLLBACK_PLAYBOOK.read_text(encoding="utf-8")
     assert "Recusar rollback para release diferente da preservada" in explicit_rollback
