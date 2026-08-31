@@ -64,6 +64,28 @@
     group: root
     mode: '0644'
 
+- name: Detectar identidade do pacote universal
+  ansible.builtin.stat:
+    path: /var/lib/cdnmnus-node/package.json
+  register: node_package_identity
+
+- name: Ler identidade do pacote universal
+  ansible.builtin.slurp:
+    src: /var/lib/cdnmnus-node/package.json
+  register: node_package_identity_raw
+  when: node_package_identity.stat.exists
+
+- name: Sincronizar somente o papel na identidade imutável do pacote
+  ansible.builtin.copy:
+    content: >-
+      {{ ((node_package_identity_raw.content | b64decode | from_json)
+          | combine({'role': cdnmnus_node_role})) | to_nice_json }}
+    dest: /var/lib/cdnmnus-node/package.json
+    owner: root
+    group: root
+    mode: '0600'
+  when: node_package_identity.stat.exists
+
 - name: Instalar cliente de menu comum
   ansible.builtin.copy:
     src: node_menu.py

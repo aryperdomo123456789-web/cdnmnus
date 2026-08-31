@@ -41,3 +41,11 @@
           }}
   roles:
     - load_balancer
+  post_tasks:
+    - name: Publicar identidade LB somente após candidato HAProxy válido
+      ansible.builtin.include_role:
+        name: node_menu
+      vars:
+        cdnmnus_node_role: load_balancer
+        cdnmnus_node_state: "{{ load_balancer_mode }}"
+      when: load_balancer_action == 'deploy'

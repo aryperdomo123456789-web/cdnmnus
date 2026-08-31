@@ -56,6 +56,7 @@ def main() -> int:
         raise ValueError("solicitação inexistente ou não está requested")
     request = matches[0]
     edge = database.edge(request["node_id"])
+    topology_node = TopologyStore(database).node(request["node_id"])
     active_jobs = database.rows(
         "SELECT id FROM deployments WHERE state IN ('queued','running') LIMIT 1"
     )
@@ -81,6 +82,11 @@ def main() -> int:
                     "-o StrictHostKeyChecking=yes -o UserKnownHostsFile="
                     + str(args.key_dir / "known_hosts")
                 ),
+                "cdnmnus_node_id": edge["id"],
+                "cdnmnus_node_name": edge["name"],
+                "cdnmnus_release_id": topology_node.get("release_id") or "",
+                "cdnmnus_config_digest": topology_node.get("node_config_digest") or "",
+                "cdnmnus_control_plane_host": "143.14.168.111",
             }
         }}}}
     }
