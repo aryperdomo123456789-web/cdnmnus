@@ -20,6 +20,7 @@ Leia primeiro estes documentos, nesta ordem:
 8. [CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md](CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md)
 9. [VOD_PLAYER_VALIDATION_2026-08-28.md](VOD_PLAYER_VALIDATION_2026-08-28.md)
 10. [VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md)
+11. [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md)
 
 Esses documentos cobrem:
 
@@ -131,3 +132,6 @@ Depois que esta base estiver estável, o próximo documento útil é um
 - `lab-player`;
 - `samples.json`;
 - playbooks de bootstrap e promoção.
+
+Para a evolução de capacidade, pesos, onboarding automático e failover entre
+LBs, use agora [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md).
