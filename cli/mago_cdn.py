@@ -502,12 +502,14 @@ def tenant_add(db: Database) -> None:
     lbs = ask("Load balancers separados por vírgula", "")
     if lbs is None: return
     tenant = db.add_tenant(tenant_id, name, canonical, origin, int(port), [x.strip() for x in lbs.split(",") if x.strip()])
+    tls_job = db.enqueue_tls_job(tenant_id)
     try:
         records = DNSReconciler(CloudflareDNS(), db=db, operator="mago-cdn-menu").apply_tenant(tenant)
-        message(f"Tenant {tenant_id} cadastrado e DNS Cloudflare reconciliado.\n\n" +
+        message(f"Tenant {tenant_id} cadastrado, TLS enfileirado e DNS Cloudflare reconciliado.\n"
+                f"Job TLS: {tls_job['id']}\n\n" +
                 "\n".join(f"{x['name']} CNAME {x['content']} DNS-only" for x in records))
     except CloudflareError as exc:
-        message(f"Tenant {tenant_id} salvo localmente, mas DNS Cloudflare não foi aplicado.\n\n{exc}\n\n"
+        message(f"Tenant {tenant_id} salvo localmente e TLS enfileirado, mas DNS Cloudflare não foi aplicado.\n\n{exc}\n\n"
                 "Não publique o hostname até configurar o token e executar a reconciliação.")
 
 
@@ -518,12 +520,14 @@ def tenant_cname(db: Database) -> None:
     hostname = ask("Hostname/alias do cliente")
     if hostname is None: return
     tenant = db.add_cname(selected, hostname)
+    tls_job = db.enqueue_tls_job(selected)
     try:
         records = DNSReconciler(CloudflareDNS(), db=db, operator="mago-cdn-menu").apply_tenant(db.tenant(selected))
-        message(f"Alias {hostname} associado e Cloudflare reconciliado.\n\n" +
+        message(f"Alias {hostname} associado, TLS enfileirado e Cloudflare reconciliado.\n"
+                f"Job TLS: {tls_job['id']}\n\n" +
                 "\n".join(f"{x['name']} CNAME {x['content']} DNS-only" for x in records))
     except CloudflareError as exc:
-        message(f"Alias {hostname} salvo localmente, mas Cloudflare não foi aplicado.\n\n{exc}")
+        message(f"Alias {hostname} salvo localmente e TLS enfileirado, mas Cloudflare não foi aplicado.\n\n{exc}")
 
 
 def tenant_vhost(db: Database) -> None:
