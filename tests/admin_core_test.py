@@ -98,6 +98,7 @@ with tempfile.TemporaryDirectory() as root:
     assert Path(release["artifact_path"], "manifest.json").is_file()
     assert Path(release["artifact_path"], "nginx/tenants/xui1.conf").is_file()
     inventory = _inventory(db, Path(root) / "keys")
+    assert inventory["all"]["vars"]["cdnmnus_firewall_admin_sources"] == ["143.14.168.111"]
     assert inventory["all"]["children"]["cdn_edges"]["hosts"]["2"]["ansible_user"] == "cdn-deploy"
     queued = queue_deployment(db, Path(root) / "releases")
     claimed = claim_deployment(db)

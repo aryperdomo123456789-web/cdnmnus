@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.db import Database
+from core.control_plane import resolve_control_plane_host
 from core.render_tenants import broker_snapshot, render_all
 
 
@@ -194,7 +195,16 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
         }
     if not hosts:
         raise ValueError("nenhuma edge elegível para este deployment")
-    return {"all": {"children": {"cdn_edges": {"hosts": hosts}}}}
+    # Em um onboarding direcionado o inventário contém apenas o alvo. Ainda
+    # assim, o hardening da edge precisa preservar a sessão do control plane;
+    # sem esta fonte explícita o UFW poderia cortar o pipeline no momento da
+    # ativação. Não abrir portas extras: somente autoriza o IP administrativo.
+    return {
+        "all": {
+            "vars": {"cdnmnus_firewall_admin_sources": [resolve_control_plane_host()]},
+            "children": {"cdn_edges": {"hosts": hosts}},
+        }
+    }
 
 
 def queue_deployment(db: Database,
