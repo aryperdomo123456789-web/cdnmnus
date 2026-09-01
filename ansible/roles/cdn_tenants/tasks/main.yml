@@ -34,27 +34,36 @@
 
 - name: Criar diretório TLS da edge
   ansible.builtin.file:
-    path: "/etc/letsencrypt/live/{{ canonical_health_host }}"
+    path: "/etc/letsencrypt/live/{{ item.canonical_host }}"
     state: directory
     owner: root
     group: root
     mode: '0700'
+  loop: "{{ tenant_contexts }}"
+  loop_control:
+    label: "{{ item.canonical_host }}"
 
-- name: Distribuir fullchain TLS por canal Ansible protegido
+- name: Distribuir fullchain TLS para cada hostname publicado
   ansible.builtin.copy:
     src: "{{ tls_fullchain_source }}"
-    dest: "/etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem"
+    dest: "/etc/letsencrypt/live/{{ item.canonical_host }}/fullchain.pem"
     owner: root
     group: root
     mode: '0644'
+  loop: "{{ tenant_contexts }}"
+  loop_control:
+    label: "{{ item.canonical_host }}"
 
-- name: Distribuir chave privada TLS por canal Ansible protegido
+- name: Distribuir chave privada TLS para cada hostname publicado
   ansible.builtin.copy:
     src: "{{ tls_privkey_source }}"
-    dest: "/etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem"
+    dest: "/etc/letsencrypt/live/{{ item.canonical_host }}/privkey.pem"
     owner: root
     group: root
     mode: '0600'
+  loop: "{{ tenant_contexts }}"
+  loop_control:
+    label: "{{ item.canonical_host }}"
 
 - name: Descobrir release ativa anterior
   ansible.builtin.command: readlink -f /opt/cdnmnus/current

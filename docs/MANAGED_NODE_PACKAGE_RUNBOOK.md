@@ -101,6 +101,11 @@ O release autorizado fica em `/etc/cdnmnus/managed-node-release.json`, pertence
 a root e não pode ser gravável por grupo/outros. Um onboarding nunca escolhe
 `main`, `latest` ou uma versão fornecida pelo nó solicitante.
 
+Na ativação de uma edge nova, o control plane distribui o certificado root-only
+para o diretório de cada hostname canônico publicado pelo snapshot. O material
+é reutilizado somente quando a validação da release e o SAN do certificado
+cobrem os hostnames; nenhum certificado ou chave é obtido da VPS solicitante.
+
 ## Solicitação edge para LB
 
 Em uma edge `ready`, o menu local mostra **Promover esta Edge para Load

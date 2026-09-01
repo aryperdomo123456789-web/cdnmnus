@@ -94,6 +94,8 @@ with tempfile.TemporaryDirectory() as temp_name:
     rollback_tasks = TENANT_TASKS.read_text(encoding="utf-8")
     assert "Preservar conteúdo das units anteriores para rollback" in rollback_tasks
     assert "Restaurar conteúdo das units que existiam" in rollback_tasks
+    assert "Distribuir fullchain TLS para cada hostname publicado" in TENANT_TASKS.read_text()
+    assert 'dest: "/etc/letsencrypt/live/{{ item.canonical_host }}/fullchain.pem"' in TENANT_TASKS.read_text()
     assert rollback_tasks.index("Restaurar release anterior atomicamente") < rollback_tasks.index(
         "Iniciar exatamente os brokers do snapshot anterior"
     )
