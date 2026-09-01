@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+action=""; canonical=""; sans=""; tenant_id=""
+while (($#)); do
+    case "$1" in
+        --action) action=${2:-}; shift 2 ;;
+        --canonical) canonical=${2:-}; shift 2 ;;
+        --sans) sans=${2:-}; shift 2 ;;
+        --tenant-id) tenant_id=${2:-}; shift 2 ;;
+        *) echo "argumento inválido" >&2; exit 2 ;;
+    esac
+done
+
+hostname_re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+id_re='^[a-z0-9][a-z0-9_-]{0,31}$'
+[[ "$action" == issue || "$action" == renew ]] || { echo "ação inválida" >&2; exit 2; }
+[[ "$canonical" =~ $hostname_re ]] || { echo "canonical inválido" >&2; exit 2; }
+[[ "$tenant_id" =~ $id_re ]] || { echo "tenant inválido" >&2; exit 2; }
+[[ -n "$sans" ]] || { echo "SANs obrigatórios" >&2; exit 2; }
+
+IFS=',' read -r -a requested_sans <<< "$sans"
+domains=("$canonical")
+for host in "${requested_sans[@]}"; do
+    [[ "$host" =~ $hostname_re ]] || { echo "SAN inválido" >&2; exit 2; }
+    domains+=("$host")
+done
+
+credentials=/etc/cdnmnus/secrets/cloudflare_acme.ini
+[[ -f "$credentials" && $(stat -c '%a' "$credentials") == 600 ]] || {
+    echo "credencial ACME ausente ou permissões inseguras" >&2; exit 2;
+}
+[[ $(stat -c '%U:%G' "$credentials") == root:root ]] || { echo "credencial ACME deve ser root:root" >&2; exit 2; }
+command -v certbot >/dev/null || { echo "certbot ausente" >&2; exit 2; }
+certbot plugins | grep -q 'dns-cloudflare' || { echo "plugin dns-cloudflare ausente" >&2; exit 2; }
+
+lineage="/etc/letsencrypt/live/$canonical"
+archive_dir="/etc/letsencrypt/archive/$canonical"
+args=(certbot certonly --non-interactive --agree-tos
+      --quiet
+      --dns-cloudflare --dns-cloudflare-credentials "$credentials"
+      --cert-name "$canonical")
+for host in "${domains[@]}"; do args+=(--domain "$host"); done
+[[ "$action" == renew ]] && args+=(--keep-until-expiring)
+log_file=$(mktemp)
+trap 'rm -f "$log_file"' EXIT
+if ! "${args[@]}" >"$log_file" 2>&1; then
+    echo "certbot falhou para $canonical" >&2
+    exit 3
+fi
+
+[[ -r "$lineage/fullchain.pem" && -r "$lineage/privkey.pem" ]] || {
+    echo "lineage ACME incompleta" >&2; exit 3;
+}
+[[ -d "$lineage" && -d "$archive_dir" ]] || { echo "diretórios live/archive ausentes" >&2; exit 3; }
+getent passwd cdn-admin >/dev/null || { echo "usuário cdn-admin ausente" >&2; exit 3; }
+for file in "$lineage/fullchain.pem" "$lineage/privkey.pem"; do
+    target=$(readlink -f -- "$file")
+    [[ "$target" == "$archive_dir"/* ]] || { echo "lineage fora do diretório autorizado" >&2; exit 3; }
+    chown root:cdn-admin "$target"
+    chmod 0640 "$target"
+done
+chown root:cdn-admin "$lineage" "$archive_dir"
+chmod 0710 "$lineage"
+chmod 0710 "$archive_dir"
+sudo -u cdn-admin test -r "$lineage/fullchain.pem"
+sudo -u cdn-admin test -r "$lineage/privkey.pem"
+printf '{"canonical":"%s","lineage":"%s","tenant_id":"%s"}\n' "$canonical" "$lineage" "$tenant_id"

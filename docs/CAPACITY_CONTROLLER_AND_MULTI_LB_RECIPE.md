@@ -1,6 +1,7 @@
 # Receita executável: capacidade contínua, edges dinâmicas e failover de LBs
 
-Data: 2026-08-31  
+Data: 2026-09-01
+Estado real de referência: [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
 Escopo: transformar a topologia atual em uma rede que mede capacidade, ajusta
 pesos, retira máquinas saturadas, pede novas máquinas e mantém um único
 endpoint público.
@@ -26,10 +27,10 @@ servidor está vivo e não remove sessões de uma edge saturada.
 
 | nó | função/estado | release | observação |
 |---|---|---|---|
-| `143.14.168.111` | LB legado/candidate | sem release gerenciada | não alterar durante o canário |
+| `45.140.192.237` | LB lógico/standby | release antiga de laboratório | edge table disabled; sem capacidade, health, lease ou fencing |
+| `143.14.168.111` | LB candidate | não ativo | preparar como standby depois de retirar qualquer função EDGE |
 | `143.14.168.168` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
 | `143.14.168.170` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
-| `45.140.192.237` | LB laboratório/standby | `v0.5.0-managed-node.9` | promoção de laboratório validada |
 
 O SQLite está íntegro e a matriz DNS local ainda lista as edges. Não fazer
 alteração de produção até existir controlador, fencing e teste de failover.
@@ -63,16 +64,53 @@ fica `candidate` e não entra automaticamente em produção.
 
 ## 4. Componentes a implementar
 
-### 4.1 Banco/control-plane
+### 4.0 Gate operacional do candidato
 
-Criar migração idempotente (sem copiar SQLite entre VPS) com:
+Antes de qualquer `deploy`, `promote`, DNS ou VIP, executar no control-plane:
 
-* `edge_capacity_profiles(edge_id, capacity_mbps, headroom, max_connections,
-  source, confidence, measured_mbps, measured_at, expires_at)`;
-* `edge_capacity_samples(edge_id, sampled_at, egress_mbps, p95_ms, http5xx,
-  active_sessions, cpu_pct, mem_pct, nic_errors, vod_206_ok)`;
-* `edge_backend_runtime(edge_id, state, pressure, desired_weight, applied_weight,
-  reason, changed_at, fencing_token)`;
+```bash
+scripts/cdnmnus-lb-candidate-preflight --node 45.140.192.237
+```
+
+O comando retorna JSON no stdout e logs estruturados no stderr. Código `0`
+significa que todos os gates, inclusive fencing externo, foram comprovados;
+ código `2` significa candidato bloqueado. O comando é read-only: não cria
+lease, não altera `state`, não habilita HAProxy, não faz reload e não escreve
+Cloudflare.
+
+No estado real de 2026-09-01, o resultado correto foi `exit 2`: HAProxy e
+Nginx passaram na sintaxe, `traffic_enabled=false`, `lease=null`, Cloudflare
+foi consultada em modo read-only sem apontar para o `.237`, mas a release
+remota `.9` não corresponde à aprovada `.8`, as duas edges responderam HTTP
+`421` ao health com SNI (hostname rejeitado, não falha de TCP), não existe
+capacidade declarada, não há PEM referenciado pelo HAProxy e não há fencing
+externo. Esses gates devem ser resolvidos individualmente; nunca use
+`--ignore` ou altere o JSON para forçar aprovação.
+
+O payload inclui `backend_diagnostics`, com `reason` categorizado como
+`connection_refused`, `tls_mismatch`, `timeout` ou `http_status_code`, além do
+status HTTP observado. A resposta `421` exige revisar o hostname permitido no
+vhost das edges; não autoriza abrir firewall, alterar DNS ou desabilitar a
+validação de SNI.
+
+### 4.1 Banco/control-plane: o que já existe
+
+O modelo novo já está implementado em `core/topology.py`, com tabelas
+`nodes`, `load_balancers`, `lb_backends`, `promotion_locks`, `node_events`,
+`node_capacity_profiles`, `node_capacity_samples` e
+`node_capacity_runtime`. Os scripts `submit_capacity_profile.py`,
+`submit_capacity_sample.py` e `cluster_status.py` também existem.
+
+Isso não significa que o controlador de produção exista: ainda faltam o
+coletor contínuo, a política de cálculo aplicada automaticamente, os alertas,
+o adapter de HAProxy runtime e o fencing externo.
+
+### 4.2 Banco/control-plane: o que ainda falta
+
+Criar migração idempotente (sem copiar SQLite entre VPS) para complementar o
+modelo existente com:
+
+* adaptar nomes/relacionamentos para as tabelas existentes `node_capacity_*`;
 * `capacity_alerts(id, severity, type, edge_id, payload_json, state,
   opened_at, acknowledged_at, resolved_at)`;
 * `failover_operations(id, old_lb, new_lb, fencing_token, phase, started_at,
@@ -83,7 +121,7 @@ de amostras (por exemplo, 7 dias em 10 s; agregados por 90 dias). Cada escrita
 de decisão deve gerar evento de auditoria com operador, release, digest e
 fencing token.
 
-### 4.2 Coletor
+### 4.3 Coletor
 
 Instalar `cdnmnus-capacity-collector.service` em cada edge. A cada 10 s,
 coletar somente métricas (nunca conteúdo ou tokens): bytes TX da interface,
@@ -91,7 +129,7 @@ conexões, CPU, memória, erros NIC, latência e resultado de `/edge-health`.
 Enviar por mTLS ao control-plane; se não houver conectividade, manter fila
 local limitada e expirar amostras antigas.
 
-### 4.3 Controlador
+### 4.4 Controlador
 
 Criar `cdnmnus-capacity-controller.service` no control-plane. Um único líder
 executa (lease de 15 s renovado a cada 5 s); os demais apenas observam. O loop
@@ -225,7 +263,7 @@ um único LB ativo e failover/rollback reproduzíveis.
 7. Implementar provider adapter de VIP; só então Cloudflare DNS como fallback.
 8. Implementar lease/quorum/fencing e simular partição, queda e retorno.
 9. Executar carga 1→10 Gbps em laboratório e registrar relatório.
-10. Promover `.66`/novo LB somente após todos os gates e atualizar os runbooks.
+10. Promover `.237` somente após todos os gates e atualizar os runbooks.
 
 ## 10. Rollback e critérios de parada
 

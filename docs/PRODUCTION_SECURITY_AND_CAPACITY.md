@@ -179,7 +179,7 @@ Alteracoes SSH exigem uma segunda sessao aberta e teste de acesso antes de recar
 - protecao contra brute force e auditoria de alteracoes;
 - CSRF quando autenticacao baseada em cookie for adotada;
 - segredo e banco com backup criptografado e permissao minima;
-- unit file com `ProtectSystem`, `PrivateTmp`, `NoNewPrivileges`, restricoes de syscall e paths minimos;
+- unit file com `ProtectSystem`, `PrivateTmp`, restricoes de syscall e paths minimos; no worker, `NoNewPrivileges` nao deve ser usado porque o helper ACME e um comando root explicitamente limitado pelo sudoers;
 - nenhuma senha inicial plaintext persistente.
 
 ### Observabilidade e resposta

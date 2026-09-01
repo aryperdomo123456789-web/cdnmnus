@@ -4,10 +4,13 @@ Se você precisar de uma porta de entrada única para toda a documentação atua
 comece por [DOCS_INDEX_AND_OPERATIONAL_RECIPE_2026-08-29.md](DOCS_INDEX_AND_OPERATIONAL_RECIPE_2026-08-29.md).
 Este runbook continua sendo a fonte de verdade da topologia e da sequência
 operacional, mas o índice organiza a leitura e conecta o código ao laboratório
-de testes.
+de testes. Para certificados, `/play/<token>/m3u8` e namespaces de cache, ele
+deve ser lido junto com
+[RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md).
 
-**Data-base:** 29/08/2026
-**Topologia alvo:** `.66` LB ativo, `.111` LB standby, `.168/.170` edges.
+**Data-base:** 01/09/2026
+**Topologia alvo:** `.237` LB ativo, `.111` LB standby, `.168/.170` edges.
+**Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
 **Regra:** preservar o tráfego atual até o substituto passar por health,
 reprodução, rollback e soak.
 
@@ -39,7 +42,8 @@ Quando documentos históricos divergirem, use esta ordem:
 - [~] `.111` ainda no runtime VOD legado, sem release ativa por symlink;
 - [x] novo relay VOD instalado e ativo no systemd de `.168/.170`;
 - [ ] HAProxy, PostgreSQL, lease ou fencing instalados;
-- [ ] `.66` cadastrada/homologada.
+- [~] `.237` possui papel lógico LB/standby, mas ainda usa release antiga e não
+  possui capacidade, health, lease ou fencing de produção.
 
 ### Banco e inventário
 
@@ -55,7 +59,8 @@ release convergente registrada; `.111` não aparece. O inventário versionado
 contém `.168` e `.170`, ambas alinhadas como `ready`.
 
 Não confunda `tenant_upstreams.kind='lb'` (LB do fornecedor/XUI) com o LB
-frontal `.66/.111`, que ainda não possui modelo no banco.
+frontal `.237/.111`, que possui modelo parcial no código, mas ainda precisa de
+registro operacional, backends, release e gates de produção.
 
 ### Release VOD ativa nas edges
 
@@ -67,15 +72,17 @@ frontal `.66/.111`, que ainda não possui modelo no banco.
 - [x] testes XCIPTV/IBO simulados e carga curta;
 - [ ] alterações consolidadas em commit/tag imutável.
 
-### Componentes ainda inexistentes
+### Componentes existentes no código e gates ainda abertos
 
 - tabelas `nodes`, `load_balancers`, `lb_backends`, `promotion_locks`,
-  `node_events`;
-- role Ansible `load_balancer` e playbooks de promoção/rebaixamento;
-- HAProxy frontal;
-- PostgreSQL autoritativo;
-- controlador de health, lease/quorum e fencing;
-- `ansible-playbook` instalado no control node.
+  `node_events` já existem em `core/topology.py`;
+- role Ansible `load_balancer` e playbooks de preflight/deploy/promoção/
+  rebaixamento/rollback já existem;
+- HAProxy frontal possui template e testes, mas o `.237` ainda não está
+  convergido para a release atual;
+- PostgreSQL, controlador contínuo de health/capacidade, quorum e fencing
+  externo continuam pendentes;
+- `ansible-playbook` continua dependente da instalação no control node.
 
 ## 3. Arquitetura final
 
@@ -86,7 +93,7 @@ DNS/floating IP com health e fencing
    |
    +--------------------+
    |                    |
-LB .66 ACTIVE      LB .111 STANDBY
+LB .237 ACTIVE     LB .111 STANDBY
 HAProxy sem cache  HAProxy sem cache
    |                    |
    +---------+----------+
@@ -216,7 +223,7 @@ servindo.
 `20260829012407-d60cfdbf`, com o mesmo digest de sete artefatos, broker/relay
 ativos, `nginx -t`, health, live e VOD Range aprovados. Os estados foram
 corrigidos por transição auditada. Permanecem os gates prolongados do passo 1;
-esta convergência não autoriza sozinha a virada para a `.66`.
+esta convergência não autoriza sozinha a virada para o `.237`.
 
 ### Contrato obrigatório para toda edge futura
 
@@ -258,9 +265,11 @@ outro. Remoção do tenant de teste não altera o principal.
 Rollback: retirar primeiro qualquer DNS de homologação, drenar, gerar release
 sem o tenant e implantar serialmente. Não remova cache/config com tráfego.
 
-### Passo 4 — Criar modelo de dados de nós/LBs
+### Passo 4 — Confirmar modelo de dados de nós/LBs
 
-Migração mínima:
+O modelo já existe em `core/topology.py`. Nesta fase, não recrie tabelas: faça
+backup, execute `TopologyStore.initialize()` de forma controlada e confirme
+que o banco usado pela operação contém as tabelas abaixo.
 
 ```text
 nodes(id,name,ipv4,role,state,release_id,node_config_digest,
@@ -294,9 +303,10 @@ O menu é cliente fino; editar JSON local não concede promoção. EDGE não ini
 HAProxy frontal; LB não inicia cache, broker ou relay de edge. O cabeçalho do
 menu deve exibir node ID, papel, estado, release e conexão com o control plane.
 
-### Passo 6 — Implementar role Ansible `load_balancer`
+### Passo 6 — Validar e completar role Ansible `load_balancer`
 
-Criar:
+Os arquivos abaixo já existem no repositório e precisam ser validados na VPS
+`.237`; não instale um role paralelo nem edite a configuração final à mão:
 
 ```text
 ansible/roles/load_balancer/defaults/main.yml
@@ -369,7 +379,7 @@ Testar partição de rede, processo travado, dois operadores, lease expirando,
 API de fencing falhando e retorno do antigo ACTIVE. Em nenhum cenário podem
 existir dois ACTIVE com fencing token válido.
 
-### Passo 10 — Preparar `.66` sem DNS
+### Passo 10 — Preparar `.237` sem DNS
 
 1. validar Ubuntu, console, capacidade, NTP e firewall;
 2. conferir fingerprint fora da conexão;
@@ -382,14 +392,14 @@ existir dois ACTIVE com fencing token válido.
 9. manter estado `candidate`.
 
 Aceite: `haproxy -c`, health das duas edges, portas administrativas privadas e
-nenhum A/AAAA público apontando para `.66`.
+nenhum A/AAAA público apontando para `.237`.
 
-### Passo 11 — Testar `.66 -> .168/.170`
+### Passo 11 — Testar `.237 -> .168/.170`
 
 Health sem alterar DNS:
 
 ```bash
-curl --fail --resolve cdn.phpd77.com:443:143.14.168.66 \
+curl --fail --resolve cdn.phpd77.com:443:45.140.192.237 \
   https://cdn.phpd77.com/edge-health
 ```
 
@@ -403,11 +413,11 @@ Aceite:
 - [ ] LB sem cache;
 - [ ] drain preserva conexões existentes;
 - [ ] failover fica dentro do SLO;
-- [ ] rollback da `.66` aprovado.
+- [ ] rollback do `.237` aprovado.
 
 ### Passo 12 — Drenar `.111` como edge
 
-Pré-condições: `.168/.170` aprovadas e com capacidade suficiente; `.66`
+Pré-condições: `.168/.170` aprovadas e com capacidade suficiente; `.237`
 candidata aprovada; backup/rollback da `.111`; storage estabilizado.
 
 1. marcar `.111` `draining` no estado autoritativo;
@@ -423,48 +433,48 @@ como edge e não avance.
 ### Passo 13 — Preparar `.111` como standby
 
 1. promover por operação autorizada, nunca editando JSON;
-2. instalar a mesma release LB da `.66`;
+2. instalar a mesma release LB do `.237`;
 3. configurar `.168/.170`;
 4. instalar secrets/TLS pelo canal autorizado;
 5. registrar `standby` sem lease ACTIVE;
 6. garantir que broker, relay e cache EDGE não estejam ativos.
 
-Aceite: mesmo release digest da `.66`, health dos backends, nenhum endpoint
+Aceite: mesmo release digest do `.237`, health dos backends, nenhum endpoint
 público e reversão para EDGE já testada em homologação.
 
 ### Passo 14 — Ensaiar promoção e retorno
 
 Testar:
 
-1. parada controlada e abrupta da `.66`;
-2. partição entre `.66` e banco;
+1. parada controlada e abrupta do `.237`;
+2. partição entre `.237` e banco;
 3. falha DNS/floating IP;
-4. retorno da `.66` após promoção da `.111`;
-5. rollback para `.66`;
+4. retorno do `.237` após promoção da `.111`;
+5. rollback para `.237`;
 6. queda de edge durante failover de LB.
 
 Registrar tempos de detecção, expiração, fencing, promoção, primeiro health,
 primeira reprodução e RTO. Aceite: nunca dois ACTIVE; antigo ativo retorna
 standby; Range/reconexão funciona; eventos e fencing token são auditáveis.
 
-### Passo 15 — Publicar `.66` ACTIVE
+### Passo 15 — Publicar `.237` ACTIVE
 
-1. congelar deployments;
+1. congelar deployments e qualquer transformação de playlist em rollout;
 2. confirmar todos os nós e PostgreSQL;
 3. confirmar snapshot e rollback;
 4. reduzir TTL com antecedência planejada;
-5. adquirir lease na `.66`;
+5. adquirir lease no `.237`;
 6. cercar o endpoint anterior;
 7. publicar floating IP/DNS;
 8. monitorar health, 5xx, latência, banda e stalls;
 9. aumentar tráfego gradualmente.
 
-Falha de SLO: fence `.66`, restaure endpoint anterior, valide reprodução e
+Falha de SLO: fence `.237`, restaure endpoint anterior, valide reprodução e
 preserve evidências. DNS nunca é “corrigido no susto” sem fencing.
 
 ### Passo 16 — Operar `.111` STANDBY
 
-- mesma release LB da `.66`;
+- mesma release LB do `.237`;
 - health contínuo das edges;
 - certificado e snapshot atualizados;
 - drift, relógio, disco e conectividade monitorados;
@@ -508,7 +518,7 @@ atual, active/standby continua recomendado.
 
 ### Load Balancers
 
-- [ ] `.66` ACTIVE e `.111` STANDBY;
+- [ ] `.237` ACTIVE e `.111` STANDBY;
 - [ ] mesma release, HAProxy sem cache;
 - [ ] health, drain, slow-start e TLS;
 - [ ] promoção e retorno ensaiados.
@@ -574,7 +584,7 @@ resultado. Nunca registrar credenciais, URIs de mídia, cookies ou redirects.
 
 ## 11. Definição de pronto
 
-Pronto significa: `.168/.170` na mesma release multi-XUI/VOD; `.66` ACTIVE por
+Pronto significa: `.168/.170` na mesma release multi-XUI/VOD; `.237` ACTIVE por
 lease/fencing; `.111` STANDBY sem role EDGE; PostgreSQL autoritativo; promoção e
 rollback reproduzíveis; players, soak, carga e desastre aprovados; nenhum
 vazamento; capacidade dentro do SLO. Até lá, preserve o legado funcional e

@@ -4,7 +4,7 @@
 Consulte este arquivo antes de qualquer mudança externa; ele é a fotografia
 operacional que deve ser mantida atualizada após cada alteração real.
 
-**Data-base:** 29/08/2026
+**Data-base:** 01/09/2026
 **Objetivo:** administrar DNS da Conta Cloudflare A e backups na Conta
 Cloudflare B pelo mesmo menu `mago-cdn`, sem nuvem laranja, sem copiar segredos
 para edges/LBs e sem publicar nós antes dos gates de produção.
@@ -30,7 +30,7 @@ Legenda: `[x]` já existe no código, `[~]` existe parcialmente/laboratório,
           Conta Cloudflare A            Conta Cloudflare B
           DNS-only (cinza)               R2 privado + lock
                     |                         |
-             .66 ACTIVE LB              objetos criptografados
+             .237 ACTIVE LB             objetos criptografados
              .111 STANDBY LB            + restore comprovado
                     |
               .168/.170 EDGES
@@ -55,7 +55,7 @@ Invariantes:
 
 ## 2. Verdade do código atual
 
-### Já existe
+### Já existe no código
 
 - [x] `Database.sync_dns_matrix()` calcula registros a partir de tenants e
   edges `ready` em `core/db.py`;
@@ -66,17 +66,19 @@ Invariantes:
 - [x] cadastro de edge, fingerprint SSH, release, health e rollout serial;
 - [x] sanitização de chaves chamadas `token`, `secret`, `credential` e
   `private_key` nos eventos;
+- [x] cliente Cloudflare DNS-only com validação de token/zona, leitura, upsert,
+  deleção exata e bloqueio de `proxied=true` em `core/cloudflare_dns.py`;
+- [x] reconciliador local com auditoria em `core/dns_reconciler.py`;
+- [x] testes offline do cliente e do reconciliador;
 - [x] backup SQLite consistente descrito em
   `ADMIN_CONTROL_PLANE_EXECUTION.md`;
 - [~] schema de PostgreSQL, lease e restore em laboratório.
 
-### Ainda não existe
+### Ainda não existe ou ainda não foi comprovado em produção
 
-- [ ] cliente Cloudflare API;
-- [ ] modelo de provider/zone/hostname/reconciliação DNS;
-- [ ] armazenamento seguro/versionado de credenciais;
+- [ ] armazenamento seguro/versionado de credenciais de produção;
 - [ ] API autenticada para o menu fino operar o control plane;
-- [ ] reconciliação real entre matriz local e Cloudflare;
+- [ ] reconciliação de produção apontando o endpoint LB ativo com lease/fencing;
 - [ ] cliente S3/R2;
 - [ ] criptografia `age`;
 - [ ] timer de backup, retenção, Bucket Lock e alertas;

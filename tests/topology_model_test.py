@@ -94,12 +94,62 @@ with tempfile.TemporaryDirectory(prefix="cdnmnus-topology-") as root:
                                "operator@example", "criar candidato")
     topology.add_load_balancer("front111", "lb111", None,
                                "operator@example", "criar standby")
+    contract = topology.register_contracted_capacity(
+        "lb66",
+        {
+            "capacity_mbps": 5000,
+            "confidence": "contracted",
+            "source": "provider-contract",
+            "expires_at": "2099-12-31T23:59:59Z",
+        },
+        operator="operator@example",
+        reason="contrato de capacidade homologado",
+    )
+    assert contract["capacity_mbps"] == 5000
+    assert topology.capacity_profile("lb66")["source"] == "provider-contract"
+    assert topology.events("lb66")[-1]["event_type"] == "capacity_profile_updated"
+    # Reaplicar o mesmo contrato é um upsert seguro, sem criar outro perfil.
+    topology.register_contracted_capacity(
+        "lb66",
+        {
+            "capacity_mbps": 5000,
+            "confidence": "contracted",
+            "source": "provider-contract",
+            "expires_at": "2099-12-31T23:59:59Z",
+        },
+        operator="operator@example",
+        reason="reconciliação idempotente",
+    )
+    assert len(database.rows("SELECT * FROM node_capacity_profiles WHERE node_id='lb66'")) == 1
+    expect(ValueError, lambda: topology.register_contracted_capacity(
+        "lb66", {"capacity_mbps": 5000, "confidence": "manual",
+                  "source": "provider-contract", "expires_at": "2099-12-31T23:59:59Z"},
+        operator="operator@example", reason="fonte inválida"))
     topology.transition_node("control1", "disabled", "operator@example", "teste de estado")
     expect(TopologyConflict, lambda: topology.add_load_balancer(
         "invalid-control", "control1", None, "operator@example", "papel inválido"
     ))
     topology.add_backend("front66", "lb011", "operator@example", "backend canário")
     topology.add_backend("front66", "edge170", "operator@example", "backend secundário", 80)
+    topology.set_capacity_profile(
+        "edge170", 5000, source="contract", confidence="contracted",
+        headroom=0.25, max_connections=250000, measured_mbps=4300,
+        measured_at="2026-08-31T00:00:00Z", expires_at="2026-09-30T00:00:00Z",
+    )
+    topology.record_capacity_sample(
+        "edge170", "2026-08-31T00:00:00Z", 1250.5, 14.2, 0.0, 1234, 41.5, 62.1, 0, True, "eth0", 10,
+    )
+    topology.set_capacity_runtime(
+        "edge170", "pressured", 0.73, 96, 80, "pressão elevada em teste", 12,
+    )
+    capacity_snapshot = topology.capacity_snapshot()
+    edge170_capacity = next(item for item in capacity_snapshot if item["node"]["id"] == "edge170")
+    assert edge170_capacity["capacity_mbps"] == 5000
+    assert edge170_capacity["sample"]["interface_name"] == "eth0"
+    assert edge170_capacity["runtime"]["state"] == "pressured"
+    assert edge170_capacity["consumption_pct"] is not None
+    assert topology.node("edge170")["capacity"]["capacity_profile"]["capacity_mbps"] == 5000
+    assert topology.node("edge170")["capacity"]["last_sample"]["tx_mbps"] == 1250.5
 
     # Trigger mantém backend restrito a EDGE até contra SQL direto.
     expect(sqlite3.IntegrityError, lambda: topology.add_backend(

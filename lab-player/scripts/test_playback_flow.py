@@ -13,12 +13,14 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+import socket
 
 LAB_DIR = Path(os.environ.get("LAB_DIR", "/opt/cdnmnus/lab-player"))
 USER_AGENT = os.environ.get("PLAYER_USER_AGENT", "IBOPlayerPro/3.6.0 (Android TV; ExoPlayerLib/2.18.7)")
 TIMEOUT = float(os.environ.get("PLAYER_TIMEOUT", "10"))
 SAMPLES_FILE = LAB_DIR / "reports" / "samples.json"
 RETRY_COUNT = int(os.environ.get("PLAYER_RETRY_COUNT", "3"))
+REDACTED_QUERY_KEYS = {"username", "user", "password", "pass", "token", "auth", "api_key", "apikey"}
 
 
 def make_request(url: str, headers: dict[str, str] | None = None):
@@ -29,6 +31,67 @@ def make_request(url: str, headers: dict[str, str] | None = None):
     return urllib.request.urlopen(req, timeout=TIMEOUT)
 
 
+def redact_url(url: str) -> str:
+    """Keep reports useful without persisting playlist credentials."""
+    parsed = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    safe_query = urllib.parse.urlencode([
+        (key, "[REDACTED]" if key.lower() in REDACTED_QUERY_KEYS else value)
+        for key, value in query
+    ])
+    path_parts = parsed.path.split("/")
+    for marker in ("movie", "series"):
+        try:
+            marker_index = path_parts.index(marker)
+        except ValueError:
+            continue
+        if len(path_parts) > marker_index + 2:
+            path_parts[marker_index + 1] = "[REDACTED]"
+            path_parts[marker_index + 2] = "[REDACTED]"
+            break
+    else:
+        if re.fullmatch(r"/[^/]+/[^/]+/[^/]+\.m3u8", parsed.path, re.I):
+            path_parts = ["", "[REDACTED]", "[REDACTED]", path_parts[-1]]
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/".join(path_parts), safe_query, ""))
+
+
+def test_dns_alias(alias_url: str, canonical_host: str = "") -> bool:
+    alias_host = urllib.parse.urlsplit(alias_url).hostname or ""
+    if not alias_host:
+        print("[dns] alias sem hostname")
+        return False
+    try:
+        alias_addresses = {item[4][0] for item in socket.getaddrinfo(alias_host, 443, type=socket.SOCK_STREAM)}
+        canonical_addresses = set()
+        if canonical_host:
+            canonical_addresses = {item[4][0] for item in socket.getaddrinfo(canonical_host, 443, type=socket.SOCK_STREAM)}
+        print(f"[dns] {alias_host} -> {sorted(alias_addresses)}")
+        if canonical_addresses:
+            print(f"[dns] {canonical_host} -> {sorted(canonical_addresses)}")
+        return bool(alias_addresses) and (not canonical_addresses or bool(alias_addresses & canonical_addresses))
+    except socket.gaierror as exc:
+        print(f"[dns] {alias_host} -> ERROR: {exc}")
+        return False
+
+
+def validate_public_playlist(path: Path, canonical_host: str, forbidden_hosts: set[str], allowed_hosts: set[str] | None = None) -> None:
+    """Reject origin/alias URLs before any media test can be marked green."""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if not text.startswith("#EXTM3U"):
+        raise ValueError("resposta não é uma playlist M3U")
+    media_urls = [line.strip() for line in text.splitlines() if line.strip().startswith(("http://", "https://"))]
+    if not media_urls:
+        raise ValueError("playlist M3U sem URLs de mídia")
+    canonical = canonical_host.lower().rstrip(".")
+    allowed = {canonical} | {item.lower().rstrip(".") for item in (allowed_hosts or set())}
+    for url in media_urls:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+        if host in forbidden_hosts:
+            raise ValueError(f"playlist expõe origem/alias proibido: {host}")
+        if host not in allowed:
+            raise ValueError(f"playlist pública usa host não canônico: {host}")
+
+
 def test_xtream_handshake(base_url: str, username: str, password: str) -> bool:
     api_url = f"{base_url.rstrip('/')}/player_api.php?username={urllib.parse.quote(username)}&password={urllib.parse.quote(password)}"
     try:
@@ -37,10 +100,10 @@ def test_xtream_handshake(base_url: str, username: str, password: str) -> bool:
             user_info = data.get("user_info", {})
             status = str(user_info.get("status", "")).lower()
             exp_date = user_info.get("exp_date")
-            print(f"[handshake] {base_url} -> status={status} exp_date={exp_date}")
+            print(f"[handshake] {base_url.split('?', 1)[0]} -> status={status} exp_date={exp_date}")
             return status == "active"
     except Exception as exc:  # pragma: no cover - report path
-        print(f"[handshake] {base_url} -> ERROR: {exc}")
+        print(f"[handshake] {redact_url(base_url)} -> ERROR: {redact_url(str(exc))}")
         return False
 
 
@@ -61,9 +124,9 @@ def test_stream_playback(stream_url: str, label: str, is_vod: bool = False) -> b
                     return range_code == 206
             return code == 200 and len(sample) > 0
         except urllib.error.URLError as exc:
-            print(f"[stream] {label} (try {attempt}) -> ERROR: {exc}")
+            print(f"[stream] {label} (try {attempt}) -> ERROR: {redact_url(str(exc))}")
         except Exception as exc:
-            print(f"[stream] {label} (try {attempt}) -> ERROR: {exc}")
+            print(f"[stream] {label} (try {attempt}) -> ERROR: {redact_url(str(exc))}")
     return False
 
 
@@ -159,6 +222,16 @@ def rebase_media_url(url: str, base_url: str) -> str:
     return f"{base_url.rstrip('/')}{suffix}"
 
 
+def expected_nginx_location(url: str) -> str:
+    """Classifica a location fechada que deveria atender uma amostra."""
+    path = urllib.parse.urlsplit(url).path.lower()
+    if path.startswith(("/movie/", "/series/")):
+        return "vod-relay"
+    if re.search(r"/[^/]+/[^/]+/[0-9]+\.m3u8$", path):
+        return "broker-manifest"
+    return "broker-live"
+
+
 def write_report(name: str, lines: list[str]) -> None:
     LAB_DIR.joinpath("reports").mkdir(parents=True, exist_ok=True)
     report_path = LAB_DIR / "reports" / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -167,6 +240,8 @@ def write_report(name: str, lines: list[str]) -> None:
 
 
 def refresh_playlists() -> None:
+    if os.environ.get("PLAYER_SKIP_SYNC") == "1":
+        return
     sync_script = LAB_DIR / "scripts" / "sync_playlist.sh"
     if not sync_script.is_file():
         raise FileNotFoundError(f"script de sincronização ausente: {sync_script}")
@@ -178,6 +253,8 @@ def load_or_build_samples(m3u_path: Path, sample_count: int, refresh_samples: bo
         return json.loads(SAMPLES_FILE.read_text(encoding="utf-8"))
 
     classified = classify_playlist_items(m3u_path)
+    if not any(classified.values()):
+        raise ValueError(f"playlist inválida ou resposta HTML sem itens M3U: {m3u_path}")
 
     def pick_live(entries: list[dict[str, str]]) -> list[dict[str, str]]:
         ufc = [item for item in entries if any(token in item["meta"].lower() for token in ("ufc", "mma")) or "lutas" in item["meta"].lower()]
@@ -208,6 +285,8 @@ def main() -> int:
         mode = "cdn"
     elif "--direct" in sys.argv:
         mode = "direct"
+    elif "--cname" in sys.argv:
+        mode = "cname"
     elif "--both" in sys.argv:
         mode = "both"
 
@@ -215,15 +294,22 @@ def main() -> int:
     password = os.environ.get("PLAYER_PASSWORD", "")
     base_cdn = os.environ.get("PLAYER_BASE_CDN", "").rstrip("/")
     base_direct = os.environ.get("PLAYER_BASE_DIRECT", "").rstrip("/")
-    latest_m3u = Path(os.environ.get("PLAYER_LATEST_PLAYLIST", str(LAB_DIR / "playlists/cdn_latest.m3u8")))
+    base_cname = os.environ.get("PLAYER_BASE_CNAME", "").rstrip("/")
+    cname_aliases = [base_cname] + [item.strip().rstrip("/") for item in os.environ.get("PLAYER_BASE_CNAME_ALIASES", "").split(",") if item.strip()]
+    cname_aliases = list(dict.fromkeys(item for item in cname_aliases if item))
+    latest_default = "cname_latest.m3u8" if mode == "cname" else "cdn_latest.m3u8"
+    latest_m3u = Path(os.environ.get("PLAYER_LATEST_PLAYLIST", str(LAB_DIR / "playlists" / latest_default)))
     sample_count = int(os.environ.get("PLAYER_SAMPLE_COUNT", "3"))
 
-    missing = [key for key, value in {
-        "PLAYER_USERNAME": username,
-        "PLAYER_PASSWORD": password,
-        "PLAYER_BASE_CDN": base_cdn,
-        "PLAYER_BASE_DIRECT": base_direct,
-    }.items() if not value]
+    required = {"PLAYER_USERNAME": username, "PLAYER_PASSWORD": password}
+    if mode in ("cdn", "both"):
+        required["PLAYER_BASE_CDN"] = base_cdn
+    if mode in ("direct", "both"):
+        required["PLAYER_BASE_DIRECT"] = base_direct
+    if mode == "cname":
+        required["PLAYER_BASE_CNAME"] = base_cname
+        required["PLAYER_BASE_CDN"] = base_cdn
+    missing = [key for key, value in required.items() if not value]
     if missing:
         print("Faltam variáveis de ambiente obrigatórias:", ", ".join(missing), file=sys.stderr)
         return 1
@@ -235,8 +321,23 @@ def main() -> int:
         ok &= test_xtream_handshake(base_cdn, username, password)
     if mode in ("direct", "both"):
         ok &= test_xtream_handshake(base_direct, username, password)
+    if mode == "cname":
+        canonical_host = urllib.parse.urlsplit(base_cdn).hostname
+        allowed_hosts = {canonical_host or ""} | {urllib.parse.urlsplit(item).hostname or "" for item in cname_aliases}
+        for alias in cname_aliases:
+            ok &= test_dns_alias(alias, canonical_host or "")
+            ok &= test_xtream_handshake(alias, username, password)
+        try:
+            validate_public_playlist(latest_m3u, canonical_host or "", {"38.46.223.77"}, allowed_hosts)
+        except (OSError, ValueError) as exc:
+            print(f"Falha de segurança na playlist CNAME: {exc}", file=sys.stderr)
+            return 2
 
-    samples = load_or_build_samples(latest_m3u, sample_count, refresh_samples=refresh)
+    try:
+        samples = load_or_build_samples(latest_m3u, sample_count, refresh_samples=refresh)
+    except (OSError, ValueError) as exc:
+        print(f"Falha ao validar playlist: {exc}", file=sys.stderr)
+        return 2
     selected_live = samples.get("live", [])
     selected_movie = samples.get("movie", [])
     selected_series = samples.get("series", [])
@@ -260,6 +361,9 @@ def main() -> int:
         suites["cdn"] = playback_suite("cdn", base_cdn)
     if mode in ("direct", "both"):
         suites["direct"] = playback_suite("direct", base_direct)
+    if mode == "cname":
+        for index, alias in enumerate(cname_aliases, start=1):
+            suites[f"cname-{index}"] = playback_suite(f"cname-{index}", alias)
 
     comparison: list[dict[str, object]] = []
     for route, suite in suites.items():
@@ -269,7 +373,10 @@ def main() -> int:
                 url = item["url"]
                 if not url:
                     continue
-                result: dict[str, object] = {"route": route, "category": category, "label": label, "url": url}
+                result: dict[str, object] = {
+                    "route": route, "category": category, "location": expected_nginx_location(url),
+                    "label": label, "url": redact_url(url),
+                }
                 try:
                     status, content_type, body_len = 0, "", 0
                     with make_request(url) as resp:
@@ -287,7 +394,7 @@ def main() -> int:
                     else:
                         result.setdefault("range_http", None)
                 except Exception as exc:
-                    result["error"] = str(exc)
+                    result["error"] = redact_url(str(exc))
                     ok = False
                 comparison.append(result)
                 print(f"[{route}] {label} -> {result}")

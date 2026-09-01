@@ -174,6 +174,49 @@ class TopologyStore:
                 );
                 CREATE INDEX IF NOT EXISTS node_events_node_created
                     ON node_events(node_id, created_at, id);
+                CREATE TABLE IF NOT EXISTS node_capacity_profiles (
+                    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                    capacity_mbps INTEGER NOT NULL CHECK(capacity_mbps > 0),
+                    headroom REAL NOT NULL DEFAULT 0.25 CHECK(headroom BETWEEN 0.2 AND 0.9),
+                    max_connections INTEGER NOT NULL DEFAULT 0 CHECK(max_connections >= 0),
+                    source TEXT NOT NULL,
+                    confidence TEXT NOT NULL CHECK(confidence IN ('manual','contracted','measured','derived')),
+                    measured_mbps INTEGER,
+                    measured_at TEXT,
+                    expires_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS node_capacity_profiles_source_idx
+                    ON node_capacity_profiles(source, confidence);
+                CREATE TABLE IF NOT EXISTS node_capacity_samples (
+                    id TEXT PRIMARY KEY,
+                    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                    sampled_at TEXT NOT NULL,
+                    interface_name TEXT,
+                    tx_mbps REAL NOT NULL CHECK(tx_mbps >= 0),
+                    p95_ms REAL NOT NULL CHECK(p95_ms >= 0),
+                    http5xx REAL NOT NULL CHECK(http5xx >= 0),
+                    active_sessions INTEGER NOT NULL CHECK(active_sessions >= 0),
+                    cpu_pct REAL NOT NULL CHECK(cpu_pct BETWEEN 0 AND 100),
+                    mem_pct REAL NOT NULL CHECK(mem_pct BETWEEN 0 AND 100),
+                    nic_errors INTEGER NOT NULL CHECK(nic_errors >= 0),
+                    vod_206_ok INTEGER NOT NULL DEFAULT 1 CHECK(vod_206_ok IN (0,1)),
+                    sample_window_sec INTEGER NOT NULL DEFAULT 10 CHECK(sample_window_sec > 0),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS node_capacity_samples_node_time
+                    ON node_capacity_samples(node_id, sampled_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS node_capacity_runtime (
+                    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                    state TEXT NOT NULL CHECK(state IN ('ready','pressured','draining','saturated','down')),
+                    pressure REAL NOT NULL CHECK(pressure >= 0),
+                    desired_weight INTEGER NOT NULL CHECK(desired_weight BETWEEN 0 AND 256),
+                    applied_weight INTEGER NOT NULL CHECK(applied_weight BETWEEN 0 AND 256),
+                    reason TEXT NOT NULL,
+                    fencing_token INTEGER NOT NULL DEFAULT 0 CHECK(fencing_token >= 0),
+                    changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
 
                 CREATE TRIGGER IF NOT EXISTS load_balancer_node_role_insert
                 BEFORE INSERT ON load_balancers
@@ -298,6 +341,9 @@ class TopologyStore:
                 DROP TRIGGER IF EXISTS load_balancer_node_role_update;
                 DROP TRIGGER IF EXISTS load_balancer_node_role_insert;
                 DROP TABLE IF EXISTS node_events;
+                DROP TABLE IF EXISTS node_capacity_runtime;
+                DROP TABLE IF EXISTS node_capacity_samples;
+                DROP TABLE IF EXISTS node_capacity_profiles;
                 DROP TABLE IF EXISTS promotion_locks;
                 DROP TABLE IF EXISTS lb_backends;
                 DROP TABLE IF EXISTS load_balancers;
@@ -657,3 +703,289 @@ class TopologyStore:
                 self._event(db, lb["node_id"], "load_balancer_demoted", operator, reason,
                             {"load_balancer_id": lb["id"], "from": lb["state"], "to": target_state})
         return True if operator is None else self.load_balancer(lb["id"])
+
+    def set_capacity_profile(
+        self, node_id: str, capacity_mbps: int, *, source: str,
+        confidence: str = "manual", headroom: float = 0.25,
+        max_connections: int = 0, measured_mbps: int | None = None,
+        measured_at: str | None = None, expires_at: str | None = None,
+        operator: str | None = None, reason: str | None = None,
+    ) -> dict[str, Any]:
+        node_id = normalize_id(node_id, "node_id")
+        capacity_mbps = int(capacity_mbps)
+        if capacity_mbps <= 0:
+            raise ValueError("capacity_mbps precisa ser positivo")
+        source = source.strip()
+        if not source:
+            raise ValueError("source é obrigatório")
+        if confidence not in {"manual", "contracted", "measured", "derived"}:
+            raise ValueError("confidence inválido")
+        headroom = float(headroom)
+        if not 0.2 <= headroom <= 0.9:
+            raise ValueError("headroom fora do intervalo permitido")
+        max_connections = int(max_connections)
+        if max_connections < 0:
+            raise ValueError("max_connections precisa ser >= 0")
+        if measured_mbps is not None:
+            measured_mbps = int(measured_mbps)
+            if measured_mbps < 0:
+                raise ValueError("measured_mbps precisa ser >= 0")
+        with self.database.transaction(immediate=True) as db:
+            node = db.execute("SELECT capacity_json FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if node is None:
+                raise ValueError("nó não encontrado")
+            payload = {
+                "capacity_mbps": capacity_mbps,
+                "headroom": headroom,
+                "max_connections": max_connections,
+                "source": source,
+                "confidence": confidence,
+                "measured_mbps": measured_mbps,
+                "measured_at": measured_at,
+                "expires_at": expires_at,
+            }
+            db.execute(
+                """INSERT INTO node_capacity_profiles(
+                       node_id,capacity_mbps,headroom,max_connections,source,confidence,
+                       measured_mbps,measured_at,expires_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                       capacity_mbps=excluded.capacity_mbps,
+                       headroom=excluded.headroom,
+                       max_connections=excluded.max_connections,
+                       source=excluded.source,
+                       confidence=excluded.confidence,
+                       measured_mbps=excluded.measured_mbps,
+                       measured_at=excluded.measured_at,
+                       expires_at=excluded.expires_at,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (node_id, capacity_mbps, headroom, max_connections, source, confidence,
+                 measured_mbps, measured_at, expires_at),
+            )
+            current = json.loads(node["capacity_json"] or "{}")
+            current["capacity_profile"] = payload
+            db.execute(
+                "UPDATE nodes SET capacity_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (json.dumps(current, sort_keys=True, separators=(",", ":")), node_id),
+            )
+            if operator is not None or reason is not None:
+                if not operator or not reason:
+                    raise ValueError("operator e reason são obrigatórios para auditoria")
+                self._event(db, node_id, "capacity_profile_updated", operator, reason,
+                            {"capacity_mbps": capacity_mbps, "source": source,
+                             "confidence": confidence, "expires_at": expires_at})
+        profile = self.capacity_profile(node_id)
+        if profile is None:
+            raise RuntimeError("perfil de capacidade não persistido")
+        return profile
+
+    def register_contracted_capacity(
+        self, node_id: str, payload: Mapping[str, Any], *, operator: str, reason: str,
+    ) -> dict[str, Any]:
+        """Registra, de forma idempotente, a capacidade contratada de um LB.
+
+        Este é o caminho normativo para um contrato de provedor. Diferente de
+        :meth:`set_capacity_profile`, não aceita uma fonte ou confiança
+        genérica: exige ``provider-contract``/``contracted`` e um vencimento
+        futuro. A operação atualiza somente o perfil do nó e deixa evento
+        sanitizado; não altera estado, lease, fencing, DNS ou tráfego.
+
+        Rollback operacional: reaplicar o último payload contratual válido
+        mantém a linha de capacidade consistente. Remoção ou substituição do
+        contrato deve ser uma operação administrativa separada e auditada.
+        """
+        if not isinstance(payload, Mapping):
+            raise ValueError("payload de capacidade precisa ser um objeto")
+        required = {"capacity_mbps", "confidence", "source", "expires_at"}
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise ValueError(f"perfil contratual incompleto: {', '.join(missing)}")
+        if str(payload["source"]).strip() != "provider-contract":
+            raise ValueError("perfil contratual exige source=provider-contract")
+        if str(payload["confidence"]).strip() != "contracted":
+            raise ValueError("perfil contratual exige confidence=contracted")
+        expires_at = payload["expires_at"]
+        if not isinstance(expires_at, str) or not expires_at.strip():
+            raise ValueError("perfil contratual exige expires_at")
+        if _parse_timestamp(expires_at) <= _utc_now():
+            raise ValueError("expires_at do contrato precisa estar no futuro")
+        node_id = normalize_id(node_id, "node_id")
+        node = self.node(node_id)
+        if node["role"] != "load_balancer":
+            raise TopologyConflict("capacidade contratual deste caminho exige um load_balancer")
+        return self.set_capacity_profile(
+            node_id, int(payload["capacity_mbps"]), source="provider-contract",
+            confidence="contracted", headroom=float(payload.get("headroom", 0.25)),
+            max_connections=int(payload.get("max_connections", 0)),
+            measured_mbps=(None if payload.get("measured_mbps") in (None, "")
+                           else int(payload["measured_mbps"])),
+            measured_at=(None if payload.get("measured_at") in (None, "")
+                         else str(payload["measured_at"])),
+            expires_at=expires_at, operator=operator, reason=reason,
+        )
+
+    def capacity_profile(self, node_id: str) -> dict[str, Any] | None:
+        rows = self.database.rows(
+            "SELECT * FROM node_capacity_profiles WHERE node_id=?",
+            (normalize_id(node_id, "node_id"),),
+        )
+        return rows[0] if rows else None
+
+    def record_capacity_sample(
+        self, node_id: str, sampled_at: str, tx_mbps: float, p95_ms: float,
+        http5xx: float, active_sessions: int, cpu_pct: float, mem_pct: float,
+        nic_errors: int, vod_206_ok: bool, interface_name: str | None = None,
+        sample_window_sec: int = 10,
+    ) -> dict[str, Any]:
+        node_id = normalize_id(node_id, "node_id")
+        sample_id = "cap-" + uuid.uuid4().hex
+        if tx_mbps < 0 or p95_ms < 0 or http5xx < 0:
+            raise ValueError("valores de amostra precisam ser não negativos")
+        if not 0 <= cpu_pct <= 100 or not 0 <= mem_pct <= 100:
+            raise ValueError("cpu_pct e mem_pct precisam estar entre 0 e 100")
+        if active_sessions < 0 or nic_errors < 0:
+            raise ValueError("contadores precisam ser não negativos")
+        with self.database.transaction(immediate=True) as db:
+            if db.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone() is None:
+                raise ValueError("nó não encontrado")
+            db.execute(
+                """INSERT INTO node_capacity_samples(
+                       id,node_id,sampled_at,interface_name,tx_mbps,p95_ms,http5xx,
+                       active_sessions,cpu_pct,mem_pct,nic_errors,vod_206_ok,sample_window_sec
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (sample_id, node_id, sampled_at, interface_name, float(tx_mbps), float(p95_ms),
+                 float(http5xx), int(active_sessions), float(cpu_pct), float(mem_pct),
+                 int(nic_errors), 1 if vod_206_ok else 0, int(sample_window_sec)),
+            )
+            current = self.node(node_id)["capacity"]
+            current["last_sample"] = {
+                "sample_id": sample_id,
+                "sampled_at": sampled_at,
+                "interface_name": interface_name,
+                "tx_mbps": float(tx_mbps),
+                "p95_ms": float(p95_ms),
+                "http5xx": float(http5xx),
+                "active_sessions": int(active_sessions),
+                "cpu_pct": float(cpu_pct),
+                "mem_pct": float(mem_pct),
+                "nic_errors": int(nic_errors),
+                "vod_206_ok": bool(vod_206_ok),
+                "sample_window_sec": int(sample_window_sec),
+            }
+            db.execute(
+                "UPDATE nodes SET capacity_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (json.dumps(current, sort_keys=True, separators=(",", ":")), node_id),
+            )
+        sample = self.capacity_sample(node_id, sample_id)
+        if sample is None:
+            raise RuntimeError("amostra de capacidade não persistida")
+        return sample
+
+    def capacity_sample(self, node_id: str, sample_id: str) -> dict[str, Any] | None:
+        rows = self.database.rows(
+            "SELECT * FROM node_capacity_samples WHERE node_id=? AND id=?",
+            (normalize_id(node_id, "node_id"), sample_id),
+        )
+        return rows[0] if rows else None
+
+    def capacity_history(self, node_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 200))
+        return self.database.rows(
+            "SELECT * FROM node_capacity_samples WHERE node_id=? ORDER BY sampled_at DESC,id DESC LIMIT ?",
+            (normalize_id(node_id, "node_id"), limit),
+        )
+
+    def set_capacity_runtime(
+        self, node_id: str, state: str, pressure: float, desired_weight: int,
+        applied_weight: int, reason: str, fencing_token: int = 0,
+    ) -> dict[str, Any]:
+        node_id = normalize_id(node_id, "node_id")
+        if state not in {"ready", "pressured", "draining", "saturated", "down"}:
+            raise ValueError("state de capacidade inválido")
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("reason é obrigatório")
+        pressure = float(pressure)
+        desired_weight = int(desired_weight)
+        applied_weight = int(applied_weight)
+        fencing_token = int(fencing_token)
+        if pressure < 0 or desired_weight < 0 or applied_weight < 0 or fencing_token < 0:
+            raise ValueError("valores de runtime precisam ser não negativos")
+        with self.database.transaction(immediate=True) as db:
+            if db.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone() is None:
+                raise ValueError("nó não encontrado")
+            db.execute(
+                """INSERT INTO node_capacity_runtime(
+                       node_id,state,pressure,desired_weight,applied_weight,reason,fencing_token,changed_at
+                   ) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                       state=excluded.state,
+                       pressure=excluded.pressure,
+                       desired_weight=excluded.desired_weight,
+                       applied_weight=excluded.applied_weight,
+                       reason=excluded.reason,
+                       fencing_token=excluded.fencing_token,
+                       changed_at=CURRENT_TIMESTAMP""",
+                (node_id, state, pressure, desired_weight, applied_weight, reason, fencing_token),
+            )
+        runtime = self.capacity_runtime(node_id)
+        if runtime is None:
+            raise RuntimeError("runtime de capacidade não persistido")
+        return runtime
+
+    def capacity_runtime(self, node_id: str) -> dict[str, Any] | None:
+        rows = self.database.rows(
+            "SELECT * FROM node_capacity_runtime WHERE node_id=?",
+            (normalize_id(node_id, "node_id"),),
+        )
+        return rows[0] if rows else None
+
+    def capacity_snapshot(self) -> list[dict[str, Any]]:
+        nodes = self.database.rows("SELECT * FROM nodes ORDER BY CAST(id AS INTEGER),id")
+        latest_samples = {
+            row["node_id"]: row
+            for row in self.database.rows("""
+                SELECT s.*
+                  FROM node_capacity_samples s
+                  JOIN (
+                      SELECT node_id, MAX(sampled_at) AS sampled_at
+                        FROM node_capacity_samples
+                       GROUP BY node_id
+                  ) latest
+                    ON latest.node_id=s.node_id AND latest.sampled_at=s.sampled_at
+            """)
+        }
+        profiles = {row["node_id"]: row for row in self.database.rows("SELECT * FROM node_capacity_profiles")}
+        runtimes = {row["node_id"]: row for row in self.database.rows("SELECT * FROM node_capacity_runtime")}
+        result: list[dict[str, Any]] = []
+        for node in nodes:
+            profile = profiles.get(node["id"])
+            sample = latest_samples.get(node["id"])
+            runtime = runtimes.get(node["id"])
+            capacity_mbps = int(profile["capacity_mbps"]) if profile else None
+            headroom = float(profile["headroom"]) if profile else 0.25
+            usable_mbps = round(capacity_mbps * (1 - headroom), 2) if capacity_mbps else None
+            tx_mbps = float(sample["tx_mbps"]) if sample else None
+            consumption_pct = round((tx_mbps / usable_mbps) * 100, 2) if tx_mbps is not None and usable_mbps else None
+            pressure = float(runtime["pressure"]) if runtime else None
+            if pressure is None and tx_mbps is not None and usable_mbps:
+                pressure = round(tx_mbps / usable_mbps, 4)
+            sample_age_seconds = None
+            if sample:
+                try:
+                    sample_age_seconds = max(0, int((_utc_now() - _parse_timestamp(sample["sampled_at"])).total_seconds()))
+                except Exception:
+                    sample_age_seconds = None
+            result.append({
+                "node": node,
+                "profile": profile,
+                "sample": sample,
+                "runtime": runtime,
+                "capacity_mbps": capacity_mbps,
+                "usable_mbps": usable_mbps,
+                "tx_mbps": tx_mbps,
+                "consumption_pct": consumption_pct,
+                "pressure": pressure,
+                "sample_age_seconds": sample_age_seconds,
+            })
+        return result

@@ -215,17 +215,177 @@
       ansible.builtin.copy:
         content: |
           server_tokens off;
+          upstream external_alias_origin {
+              server {{ external_alias_origin_host }}:{{ external_alias_origin_port }};
+              keepalive 32;
+          }
+          {% if external_alias_has_vod | default(false) %}
+          upstream external_alias_vod {
+              server unix:/run/cdnmnus/vod-relay-{{ external_alias_tenant_id }}.sock;
+              keepalive 32;
+          }
+          {% endif %}
+          {% for item in external_alias_load_balancers | default([]) %}
+          upstream external_alias_lb_{{ loop.index0 }} {
+              server {{ item.host }}:{{ item.port }};
+              keepalive 32;
+          }
+          {% endfor %}
           server {
               listen 80 default_server;
               server_name _;
-              return 421;
+              if ($host = cdn.phpd77.com) { return 421; }
+              # DNS-only CNAMEs preserve the original Host. Keep aliases out
+              # of the database while sending only application paths to the
+              # selected tenant; administrative/unknown paths stay blocked.
+              location = /get.php {
+                  proxy_pass http://external_alias_origin;
+                  proxy_set_header Host {{ canonical_health_host }};
+                  proxy_set_header Accept-Encoding "";
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+                  sub_filter_types *;
+                  sub_filter_once off;
+                  sub_filter 'http://{{ external_alias_origin_host }}:{{ external_alias_origin_port }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'http://{{ external_alias_origin_host }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'https://{{ external_alias_origin_host }}:{{ external_alias_origin_port }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'https://{{ external_alias_origin_host }}' 'http://{{ canonical_health_host }}';
+              }
+              location = /player_api.php {
+                  proxy_pass http://external_alias_origin;
+                  proxy_set_header Host {{ canonical_health_host }};
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+              }
+              location ~ ^/(?:hls|live)/ {
+                  proxy_pass http://broker_{{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Tenant {{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header X-Broker-Action resolve;
+                  proxy_set_header X-Original-URI $request_uri;
+                  proxy_pass_request_body off;
+              }
+              {% if external_alias_has_vod | default(false) %}
+              location ~ ^/(?:movie|series)/ {
+                  limit_except GET HEAD { deny all; }
+                  proxy_pass http://external_alias_vod;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header Range $http_range;
+                  proxy_set_header If-Range $http_if_range;
+                  proxy_set_header X-Forwarded-For "";
+                  proxy_set_header X-Real-IP "";
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+                  proxy_hide_header Via;
+                  proxy_hide_header X-Powered-By;
+                  proxy_hide_header X-Accel-Redirect;
+                  proxy_hide_header Set-Cookie;
+                  proxy_buffering off;
+                  proxy_request_buffering off;
+                  proxy_read_timeout 30s;
+                  access_log off;
+              }
+              {% endif %}
+              location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ {
+                  proxy_pass http://broker_{{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Tenant {{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header X-Broker-Action resolve;
+                  proxy_set_header X-Original-URI $request_uri;
+                  proxy_pass_request_body off;
+              }
+              location ^~ /__cdnmnus_{{ external_alias_tenant_id }}_origin/ {
+                  internal;
+                  proxy_pass http://external_alias_origin/;
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+              }
+              {% for item in external_alias_load_balancers | default([]) %}
+              location ^~ /__cdnmnus_{{ external_alias_tenant_id }}_lb_{{ loop.index0 }}/ {
+                  internal;
+                  proxy_pass http://external_alias_lb_{{ loop.index0 }}/;
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+              }
+              {% endfor %}
+              location / {
+                  return 421;
+              }
           }
           server {
               listen 443 ssl default_server;
               server_name _;
+              if ($host = cdn.phpd77.com) { return 421; }
               ssl_certificate /etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem;
               ssl_certificate_key /etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem;
-              return 421;
+              location = /get.php {
+                  proxy_pass http://external_alias_origin;
+                  proxy_set_header Host {{ canonical_health_host }};
+                  proxy_set_header Accept-Encoding "";
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+                  sub_filter_types *;
+                  sub_filter_once off;
+                  sub_filter 'http://{{ external_alias_origin_host }}:{{ external_alias_origin_port }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'http://{{ external_alias_origin_host }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'https://{{ external_alias_origin_host }}:{{ external_alias_origin_port }}' 'http://{{ canonical_health_host }}';
+                  sub_filter 'https://{{ external_alias_origin_host }}' 'http://{{ canonical_health_host }}';
+              }
+              location = /player_api.php {
+                  proxy_pass http://origin_{{ external_alias_tenant_id }};
+                  proxy_set_header Host {{ canonical_health_host }};
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+              }
+              location ~ ^/(?:hls|live)/ {
+                  proxy_pass http://broker_{{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Tenant {{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header X-Broker-Action resolve;
+                  proxy_set_header X-Original-URI $request_uri;
+                  proxy_pass_request_body off;
+              }
+              {% if external_alias_has_vod | default(false) %}
+              location ~ ^/(?:movie|series)/ {
+                  limit_except GET HEAD { deny all; }
+                  proxy_pass http://external_alias_vod;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header Range $http_range;
+                  proxy_set_header If-Range $http_if_range;
+                  proxy_set_header X-Forwarded-For "";
+                  proxy_set_header X-Real-IP "";
+                  proxy_hide_header Location;
+                  proxy_hide_header Server;
+                  proxy_hide_header Via;
+                  proxy_hide_header X-Powered-By;
+                  proxy_hide_header X-Accel-Redirect;
+                  proxy_hide_header Set-Cookie;
+                  proxy_buffering off;
+                  proxy_request_buffering off;
+                  proxy_read_timeout 30s;
+                  access_log off;
+              }
+              {% else %}
+              location ~ ^/(?:movie|series)/ {
+                  access_log off;
+                  return 503;
+              }
+              {% endif %}
+              location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ {
+                  proxy_pass http://broker_{{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Tenant {{ external_alias_tenant_id }};
+                  proxy_set_header X-CDN-Public-Host {{ canonical_health_host }};
+                  proxy_set_header X-Broker-Action resolve;
+                  proxy_set_header X-Original-URI $request_uri;
+                  proxy_pass_request_body off;
+              }
+              location / {
+                  return 421;
+              }
           }
         dest: /etc/nginx/conf.d/97-cdnmnus-default.conf
         owner: root

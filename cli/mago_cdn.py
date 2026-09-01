@@ -16,8 +16,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.db import Database, normalize_id
+from core.cloudflare_dns import CloudflareDNS, CloudflareError
+from core.control_plane import resolve_control_plane_host
 from core.deploy import queue_deployment
 from core.node_onboarding import onboard_node
+from core.dns_reconciler import DNSReconciler, reconcile_cluster_dns
 from core.render_tenants import render_tenant
 from core.topology import TopologyStore
 
@@ -255,6 +258,115 @@ def edge_list(db: Database) -> None:
     message("EDGES\n\n" + ("\n".join(lines) if lines else "Nenhuma edge cadastrada."))
 
 
+def capacity_snapshot(db: Database) -> list[dict]:
+    topology = TopologyStore(db)
+    topology.initialize()
+    return topology.capacity_snapshot()
+
+
+def capacity_overview(db: Database) -> None:
+    snapshot = capacity_snapshot(db)
+    lines = [
+        "CAPACIDADE E CONSUMO",
+        f"Nós: {len(snapshot)}",
+        f"Capacidade contratada: {sum(item['capacity_mbps'] or 0 for item in snapshot)} Mbps",
+        f"Capacidade útil: {round(sum(item['usable_mbps'] or 0 for item in snapshot), 2)} Mbps",
+        f"Tráfego medido: {round(sum(item['tx_mbps'] or 0 for item in snapshot), 2)} Mbps",
+        f"Pressão máxima: {round(max((item['pressure'] or 0 for item in snapshot), default=0), 4)}",
+        "",
+    ]
+    for item in snapshot:
+        node = item["node"]
+        runtime = item.get("runtime") or {}
+        lines.append(
+            f"{node['id']:>4} | {node['name']:<24.24} | {node['role']:<14} | {node['state']:<11} | "
+            f"{item.get('capacity_mbps') or '-':>5} Mbps | {item.get('tx_mbps') or 0:>7.2f} Mbps | "
+            f"peso {runtime.get('applied_weight', '-')}"
+        )
+    message("\n".join(lines), 28)
+
+
+def capacity_choose_node(db: Database) -> dict | None:
+    snapshot = capacity_snapshot(db)
+    if not snapshot:
+        message("Nenhum nó cadastrado.")
+        return None
+    selected = choose("Selecionar nó", [
+        (item["node"]["id"], f"{item['node']['name']} | {item['node']['ipv4']} | {item['node']['role']} | {item['node']['state']}")
+        for item in snapshot
+    ], 22)
+    if selected is None:
+        return None
+    return next((item for item in snapshot if item["node"]["id"] == selected), None)
+
+
+def capacity_detail(db: Database) -> None:
+    item = capacity_choose_node(db)
+    if item is None:
+        return
+    node = item["node"]
+    profile = item.get("profile") or {}
+    sample = item.get("sample") or {}
+    runtime = item.get("runtime") or {}
+    lines = [
+        f"{node['id']} | {node['name']} | {node['ipv4']}",
+        f"Papel: {node['role']} | Estado: {node['state']}",
+        f"Capacidade contratada: {item.get('capacity_mbps') or 'n/a'} Mbps",
+        f"Capacidade útil: {item.get('usable_mbps') or 'n/a'} Mbps",
+        f"Consumo atual: {item.get('tx_mbps') or 'n/a'} Mbps",
+        f"Pressão: {item.get('pressure') or 'n/a'} | Runtime: {runtime.get('state', 'n/a')} | Peso: {runtime.get('applied_weight', 'n/a')}",
+        f"Perfil: {profile.get('confidence', 'n/a')} | Fonte: {profile.get('source', 'n/a')}",
+        f"Amostra: {sample.get('sampled_at', 'n/a')} | Idade: {item.get('sample_age_seconds', 'n/a')}s",
+    ]
+    if sample:
+        lines.extend([
+            f"CPU: {sample.get('cpu_pct', 'n/a')}%",
+            f"Memória: {sample.get('mem_pct', 'n/a')}%",
+            f"Sessões ativas: {sample.get('active_sessions', 'n/a')}",
+            f"p95: {sample.get('p95_ms', 'n/a')} ms",
+            f"HTTP 5xx: {sample.get('http5xx', 'n/a')}",
+            f"NIC errors: {sample.get('nic_errors', 'n/a')}",
+        ])
+    message("\n".join(lines), 24)
+
+
+def capacity_profile_update(db: Database) -> None:
+    item = capacity_choose_node(db)
+    if item is None:
+        return
+    node = item["node"]
+    raw = ask("Capacidade contratada em Mbps", str(item.get("capacity_mbps") or 1000))
+    if raw is None or not raw.strip():
+        return
+    headroom = ask("Headroom", str((item.get("profile") or {}).get("headroom", 0.25)))
+    if headroom is None or not headroom.strip():
+        return
+    max_connections = ask("Conexões máximas", str((item.get("profile") or {}).get("max_connections", 0)))
+    if max_connections is None or not max_connections.strip():
+        return
+    source = ask("Fonte", (item.get("profile") or {}).get("source", "manual")) or "manual"
+    confidence = ask("Confiança", (item.get("profile") or {}).get("confidence", "manual")) or "manual"
+    measured = ask("Capacidade medida opcional", str((item.get("profile") or {}).get("measured_mbps", "")) or "")
+    measured_at = ask("Timestamp medido opcional", (item.get("profile") or {}).get("measured_at", "")) or ""
+    expires_at = ask("Validade opcional", (item.get("profile") or {}).get("expires_at", "")) or ""
+    topology = TopologyStore(db); topology.initialize()
+    result = topology.set_capacity_profile(
+        node["id"], int(raw), source=source, confidence=confidence, headroom=float(headroom),
+        max_connections=int(max_connections),
+        measured_mbps=int(measured) if measured else None,
+        measured_at=measured_at or None,
+        expires_at=expires_at or None,
+    )
+    message(
+        "Perfil de capacidade atualizado.\n\n"
+        f"Nó: {result['node_id']}\n"
+        f"Capacidade: {result['capacity_mbps']} Mbps\n"
+        f"Headroom: {result['headroom']}\n"
+        f"Fonte: {result['source']}\n"
+        f"Confiança: {result['confidence']}"
+    )
+
+
 def node_add(db: Database) -> None:
     role = choose("Papel inicial", [
         ("edge", "Edge — recebe runtime e deployment isolado"),
@@ -281,7 +393,7 @@ def node_add(db: Database) -> None:
         result = onboard_node(
             db, name=name, ipv4=ipv4, ssh_port=int(port_raw),
             initial_user=initial_user, password=password, role=role,
-            operator="control-plane-menu", control_plane="143.14.168.111",
+            operator="control-plane-menu", control_plane=resolve_control_plane_host(require_explicit=True),
         )
     finally:
         password = ""; del password; gc.collect()
@@ -300,7 +412,17 @@ def edge_action(db: Database, state: str) -> None:
     if selected is None: return
     if confirm(f"Alterar {selected} para {state}?"):
         db.set_edge_state(selected, state); db.sync_dns_matrix()
-        message(f"Edge {selected}: {state}. Matriz DNS recalculada.")
+        try:
+            provider = CloudflareDNS()
+            edges = [x for x in db.edges() if x["state"] == "ready"]
+            records = DNSReconciler(provider, db=db, operator="mago-cdn-menu").repair_canonical_pool(
+                "cdn.phpd77.com", [x["ipv4"] for x in edges],
+                forbidden_ips={"143.14.168.111"},
+            )
+            message(f"Edge {selected}: {state}. Cloudflare reconciliado.\n\n" +
+                    "\n".join(f"{x['name']} A {x['content']} DNS-only" for x in records))
+        except CloudflareError as exc:
+            message(f"Edge {selected}: {state}. Matriz local recalculada, mas Cloudflare não foi aplicado.\n\n{exc}")
 
 
 def edge_rename(db: Database) -> None:
@@ -379,8 +501,14 @@ def tenant_add(db: Database) -> None:
     if port is None: return
     lbs = ask("Load balancers separados por vírgula", "")
     if lbs is None: return
-    db.add_tenant(tenant_id, name, canonical, origin, int(port), [x.strip() for x in lbs.split(",") if x.strip()])
-    message(f"Tenant {tenant_id} cadastrado.")
+    tenant = db.add_tenant(tenant_id, name, canonical, origin, int(port), [x.strip() for x in lbs.split(",") if x.strip()])
+    try:
+        records = DNSReconciler(CloudflareDNS(), db=db, operator="mago-cdn-menu").apply_tenant(tenant)
+        message(f"Tenant {tenant_id} cadastrado e DNS Cloudflare reconciliado.\n\n" +
+                "\n".join(f"{x['name']} CNAME {x['content']} DNS-only" for x in records))
+    except CloudflareError as exc:
+        message(f"Tenant {tenant_id} salvo localmente, mas DNS Cloudflare não foi aplicado.\n\n{exc}\n\n"
+                "Não publique o hostname até configurar o token e executar a reconciliação.")
 
 
 def tenant_cname(db: Database) -> None:
@@ -389,7 +517,13 @@ def tenant_cname(db: Database) -> None:
     if selected is None: return
     hostname = ask("Hostname/alias do cliente")
     if hostname is None: return
-    db.add_cname(selected, hostname); message(f"Alias {hostname} associado a {selected}. TLS pendente.")
+    tenant = db.add_cname(selected, hostname)
+    try:
+        records = DNSReconciler(CloudflareDNS(), db=db, operator="mago-cdn-menu").apply_tenant(db.tenant(selected))
+        message(f"Alias {hostname} associado e Cloudflare reconciliado.\n\n" +
+                "\n".join(f"{x['name']} CNAME {x['content']} DNS-only" for x in records))
+    except CloudflareError as exc:
+        message(f"Alias {hostname} salvo localmente, mas Cloudflare não foi aplicado.\n\n{exc}")
 
 
 def tenant_vhost(db: Database) -> None:
@@ -452,12 +586,66 @@ def vod_menu(db: Database) -> None:
         except Exception as exc: message("Falha na operação VOD:\n\n" + str(exc))
 
 
-def dns_menu(db: Database) -> None:
+def cloudflare_reconcile(db: Database) -> None:
+    result = reconcile_cluster_dns(db, operator="mago-cdn-menu")
+    pool, aliases = result["pool"], result["aliases"]
+    message("CLOUDFLARE RECONCILIADO\n\n" +
+            "\n".join(f"{x['name']} {x['type']} {x['content']} DNS-only" for x in pool + aliases))
+
+
+def cloudflare_configure() -> None:
+    zones = ask(
+        "Zonas Cloudflare autorizadas (separe por vírgula)",
+        "phpd77.com",
+    )
+    if zones is None or not zones.strip():
+        return
+    token = ask("Token Cloudflare (não será exibido nem armazenado em banco)", password=True)
+    if token is None or not token.strip():
+        return
     try:
-        matrix = db.sync_dns_matrix()
-        lines = [f"{x['hostname']} -> [{', '.join(x['targets']) or 'sem edge pronta'}] | TLS {x['tls_status']}" for x in matrix]
-        message("MATRIZ DNS RECALCULADA\n\n" + ("\n".join(lines) if lines else "Nenhum hostname habilitado."))
-    except Exception as exc: message("Falha no DNS:\n\n" + str(exc))
+        provider = CloudflareDNS(token=token.strip(), zone=zones.strip())
+        provider.verify()
+        directory = Path("/etc/cdnmnus/cloudflare")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        token_path = directory / "api-token"
+        zones_path = directory / "zones"
+        token_path.write_text(token.strip() + "\n", encoding="utf-8")
+        token_path.chmod(0o600)
+        zones_path.write_text(zones.strip() + "\n", encoding="utf-8")
+        zones_path.chmod(0o644)
+        token = ""
+        message("Cloudflare configurada e token validado.\n\n" +
+                "Zonas autorizadas: " + ", ".join(provider.zones) +
+                "\nModo: DNS-only\n\nExecute agora a reconciliação para corrigir o pool canônico.")
+    except CloudflareError as exc:
+        message("Cloudflare não foi configurada.\n\n" + str(exc))
+    finally:
+        token = ""
+        gc.collect()
+
+
+def dns_menu(db: Database) -> None:
+    while True:
+        action = choose("DNS e Cloudflare", [
+            ("1", "Ver matriz DNS local"),
+            ("2", "Reconciliar Cloudflare agora"),
+            ("3", "Configurar conta/token Cloudflare"),
+            ("0", "Voltar"),
+        ])
+        if action in (None, "0"): return
+        try:
+            if action == "1":
+                matrix = db.sync_dns_matrix()
+                lines = [f"{x['hostname']} -> [{', '.join(x['targets']) or 'sem edge pronta'}] | TLS {x['tls_status']}" for x in matrix]
+                message("MATRIZ DNS LOCAL\n\n" + ("\n".join(lines) if lines else "Nenhum hostname habilitado."))
+            elif action == "2":
+                if confirm("Aplicar o estado DNS desejado na Cloudflare?\n\nIsso removerá o control-plane do pool canônico e manterá DNS-only."):
+                    cloudflare_reconcile(db)
+            elif action == "3":
+                cloudflare_configure()
+        except (CloudflareError, ValueError) as exc:
+            message("Falha na reconciliação Cloudflare:\n\n" + str(exc))
 
 
 def deployments_menu(db: Database) -> None:
@@ -598,6 +786,8 @@ def infrastructure_menu(db: Database) -> None:
             ("3", "DNS e matriz de distribuição"),
             ("4", "Implantações, versões e execução sequencial"),
             ("5", "Solicitações para preparar Load Balancer"),
+            ("6", "Capacidade, consumo e pressão do cluster"),
+            ("7", "Ajustar perfil de capacidade de um nó"),
             ("0", "Voltar"),
         ])
         if action in (None, "0"): return
@@ -606,6 +796,8 @@ def infrastructure_menu(db: Database) -> None:
         elif action == "3": dns_menu(db)
         elif action == "4": deployments_menu(db)
         elif action == "5": promotion_requests_menu(db)
+        elif action == "6": capacity_overview(db)
+        elif action == "7": capacity_profile_update(db)
 
 
 def operations_menu(db: Database) -> None:

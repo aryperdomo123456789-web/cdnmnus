@@ -1,4 +1,10 @@
-"""Renderização pura e determinística dos vhosts Nginx por tenant."""
+"""Renderização pura e determinística dos vhosts Nginx por tenant.
+
+``health_host`` pertence ao tenant e deve ser um dos seus hosts publicados.
+Por padrão é o canonical; isso evita que probes usem um hostname global que
+caia no vhost default e receba 421. O renderer não cria certificados nem
+altera DNS: a cobertura SAN é um gate separado do provisionamento.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -28,6 +34,12 @@ def _normalized(tenant: dict[str, Any]) -> dict[str, Any]:
                       for item in hosts})
     canonical = normalize_hostname(str(tenant["canonical_host"]))
     aliases = [canonical, *[host for host in aliases if host != canonical]]
+    health_host = normalize_hostname(str(tenant.get("health_host") or canonical))
+    if health_host not in aliases:
+        raise ValueError(f"health_host do tenant {tenant_id} não está cadastrado")
+    playlist_host = normalize_hostname(str(tenant.get("playlist_host") or canonical))
+    if playlist_host not in aliases:
+        raise ValueError(f"host de playlist do tenant {tenant_id} não está cadastrado")
     upstreams = tenant.get("upstreams", [])
     origin = [item for item in upstreams if item["kind"] == "origin"]
     if len(origin) != 1:
@@ -36,7 +48,7 @@ def _normalized(tenant: dict[str, Any]) -> dict[str, Any]:
     for item in upstreams:
         if item["kind"] in grouped:
             grouped[item["kind"]].append({"host": normalize_hostname(str(item["host"])), "port": normalize_port(item["port"])})
-    return {"id": tenant_id, "hosts": aliases,
+    return {"id": tenant_id, "hosts": aliases, "health_host": health_host, "playlist_host": playlist_host,
             "origin": {"host": normalize_hostname(str(origin[0]["host"])), "port": normalize_port(origin[0]["port"])},
             "lb": sorted(grouped["lb"], key=lambda x: (x["host"], x["port"])),
             "vod": sorted(grouped["vod"], key=lambda x: (x["host"], x["port"]))}
@@ -46,6 +58,8 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
     cfg = _normalized(tenant)
     tid = cfg["id"]
     origin = cfg["origin"]
+    canonical = cfg["hosts"][0]
+    health_host = cfg["health_host"]
     server_names = " ".join(_nginx(host) for host in cfg["hosts"])
     lb_upstreams = "\n\n".join(
         f"upstream lb_{tid}_{index} {{\n    server {_nginx(item['host'])}:{item['port']};\n    keepalive 32;\n}}"
@@ -114,7 +128,52 @@ server {{
     listen 80;
     server_name {server_names};
     location ^~ /.well-known/acme-challenge/ {{ root /var/www/html; }}
-    location / {{ return 308 https://$host$request_uri; }}
+    # Alguns aplicativos aceitam somente HTTP. Mantemos as mesmas rotas
+    # protegidas do vhost TLS, sempre ocultando a origem nos manifestos.
+    location = /get.php {{
+        proxy_pass http://origin_{tid};
+        proxy_set_header Host {server_names.split()[0]};
+        proxy_set_header Accept-Encoding "";
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        sub_filter_types *;
+        sub_filter_once off;
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+    }}
+    location ~ ^/(?:hls|live)/ {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+    location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+{vod_public_location}
+    location ^~ /__cdnmnus_{tid}_origin/ {{
+        internal;
+        proxy_pass http://origin_{tid}/;
+        proxy_cache cache_{tid};
+        proxy_cache_key "{tid}|$request_method|$host|$uri";
+        proxy_cache_bypass $http_range;
+        proxy_no_cache $http_range;
+        proxy_read_timeout 20s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+    }}
+
+{lb_locations}
+    location / {{ return 421; }}
 }}
 
 server {{
@@ -125,8 +184,28 @@ server {{
 
     location = /edge-health {{
         proxy_pass http://broker_{tid}/health;
+        proxy_set_header Host {health_host};
+        proxy_set_header X-CDN-Public-Host {health_host};
         proxy_pass_request_body off;
         access_log off;
+    }}
+
+    # XUI get.php returns a playlist body. Rewrite origin authorities at the
+    # edge so clients receive only the public hostname, never the XUI IP.
+    location = /get.php {{
+        proxy_pass http://origin_{tid};
+        proxy_set_header Host {server_names.split()[0]};
+        proxy_set_header Accept-Encoding "";
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        sub_filter_types *;
+        sub_filter_once off;
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
     }}
 
     location ~ ^/(?:hls|live)/ {{
@@ -207,8 +286,8 @@ def broker_snapshot(tenants: Iterable[dict[str, Any]], generation: int) -> str:
     for tenant in sorted(tenants, key=lambda item: str(item["id"])):
         cfg = _normalized(tenant)
         result["tenants"][cfg["id"]] = {
-            "public_hosts": cfg["hosts"], "origin": cfg["origin"],
-            "load_balancers": cfg["lb"], "vod_hosts": cfg["vod"], "ttl_seconds": 15,
+        "public_hosts": cfg["hosts"], "origin": cfg["origin"],
+            "health_host": cfg["health_host"], "load_balancers": cfg["lb"], "vod_hosts": cfg["vod"], "ttl_seconds": 15,
             "vod_policy": {
                 "seeds": [{"host": item["host"],
                            "schemes": ["https"] if item["port"] == 443 else ["http"],

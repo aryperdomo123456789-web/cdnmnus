@@ -27,6 +27,8 @@ from core.db import Database, normalize_id
 from core.deploy import queue_deployment
 from core.edge_manager import bootstrap_edge, converge_ssh_mesh, scan_host_identity
 from core.render_tenants import render_tenant
+from core.dns_reconciler import reconcile_cluster_dns
+from core.cloudflare_dns import CloudflareError
 
 MAX_BODY = 64 * 1024
 DB = Database()
@@ -158,9 +160,30 @@ class Handler(BaseHTTPRequestHandler):
                 tenant = DB.add_tenant(str(payload.get("id", "")), str(payload.get("name", "")),
                                        str(payload.get("canonical_host", "")), str(payload.get("origin_host", "")),
                                        int(payload.get("origin_port", 80)), payload.get("load_balancers", []))
-                self._json(201, {"tenant": tenant}); return
+                tls_job = DB.enqueue_tls_job(tenant["id"])
+                try:
+                    dns = reconcile_cluster_dns(DB, operator="admin-web")
+                except CloudflareError as exc:
+                    if str(exc) == "token Cloudflare ausente" or str(exc) == "zona Cloudflare ausente":
+                        self._json(201, {"tenant": tenant, "status": "pending_tls", "tls_job": tls_job,
+                                        "dns_applied": False,
+                                        "warning": f"DNS pendente: {exc}"}); return
+                    self._json(502, {"error": f"tenant salvo localmente; Cloudflare não aplicado: {exc}",
+                                     "status": "pending_tls", "tls_job": tls_job}); return
+                self._json(201, {"tenant": tenant, "status": "pending_tls", "tls_job": tls_job, "dns": dns}); return
             if route == "/api/cnames":
-                self._json(201, DB.add_cname(str(payload.get("tenant_id", "")), str(payload.get("hostname", "")))); return
+                result = DB.add_cname(str(payload.get("tenant_id", "")), str(payload.get("hostname", "")))
+                tls_job = DB.enqueue_tls_job(result["tenant_id"])
+                try:
+                    dns = reconcile_cluster_dns(DB, operator="admin-web")
+                except CloudflareError as exc:
+                    if str(exc) == "token Cloudflare ausente" or str(exc) == "zona Cloudflare ausente":
+                        self._json(201, {"cname": result, "status": "pending_tls", "tls_job": tls_job,
+                                        "dns_applied": False,
+                                        "warning": f"DNS pendente: {exc}"}); return
+                    self._json(502, {"error": f"alias salvo localmente; Cloudflare não aplicado: {exc}",
+                                     "status": "pending_tls", "tls_job": tls_job}); return
+                self._json(201, {"cname": result, "status": "pending_tls", "tls_job": tls_job, "dns": dns}); return
             if route == "/api/vod-sources":
                 self._json(201, {"upstream": DB.add_upstream(str(payload.get("tenant_id", "")), "vod", str(payload.get("host", "")), int(payload.get("port", 80))) }); return
             if route == "/api/dns/sync":
@@ -173,22 +196,33 @@ class Handler(BaseHTTPRequestHandler):
                 DB.set_setting("web_port", port); self._json(200, {"web_port": port, "restart_required": True}); return
             parts = route.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "edges"] and parts[3] == "drain":
-                DB.set_edge_state(parts[2], "draining"); DB.sync_dns_matrix(); self._json(200, {"state": "draining"}); return
+                DB.set_edge_state(parts[2], "draining"); DB.sync_dns_matrix()
+                try: reconcile_cluster_dns(DB, operator="admin-web")
+                except CloudflareError as exc: self._json(502, {"error": f"estado local alterado; Cloudflare não aplicado: {exc}"}); return
+                self._json(200, {"state": "draining"}); return
             if len(parts) == 4 and parts[:2] == ["api", "edges"] and parts[3] == "health":
                 edge = DB.edge(parts[2]); context = ssl._create_unverified_context()
                 tenants = DB.tenants(enabled_only=True)
                 if not tenants:
                     raise ValueError("nenhum tenant habilitado para health check")
-                health_host = tenants[0]["canonical_host"]
-                request = urllib.request.Request(
-                    f"https://{edge['ipv4']}/edge-health",
-                    headers={"Host": health_host, "User-Agent": "cdnmnus-health-controller/1.0"},
-                )
-                try:
-                    with urllib.request.urlopen(request, timeout=5, context=context) as response: status = response.status
-                except Exception: status = 503
+                statuses: dict[str, int] = {}
+                for tenant in tenants:
+                    health_host = tenant.get("health_host") or tenant["canonical_host"]
+                    request = urllib.request.Request(
+                        f"https://{edge['ipv4']}/edge-health",
+                        headers={"Host": health_host, "User-Agent": "cdnmnus-health-controller/1.0"},
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=5, context=context) as response:
+                            statuses[health_host] = response.status
+                    except Exception:
+                        statuses[health_host] = 503
+                status = 200 if all(value == 200 for value in statuses.values()) else 503
                 state = "ready" if status == 200 else "failed"; DB.set_edge_state(edge["id"], state); DB.sync_dns_matrix()
-                self._json(200 if status == 200 else 503, {"status": status, "state": state}); return
+                try: reconcile_cluster_dns(DB, operator="admin-web")
+                except CloudflareError as exc: self._json(502, {"error": f"health localizado; Cloudflare não aplicado: {exc}"}); return
+                self._json(200 if status == 200 else 503,
+                           {"status": status, "state": state, "tenants": statuses}); return
             self._json(404, {"error": "rota não encontrada"})
         except PermissionError as exc:
             self._json(403, {"error": str(exc)})

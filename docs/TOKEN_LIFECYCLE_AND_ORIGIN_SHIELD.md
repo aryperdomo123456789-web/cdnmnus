@@ -1,5 +1,30 @@
 # cdnmnus: tokens inteligentes e origin shield
 
+**Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
+
+## Estado atual do tenant tvbrasil
+
+O XUI `38.46.223.77` pode emitir dois formatos de playlist. No formato
+legado, os itens usam `/play/<token>/m3u8`; no formato atualmente observado,
+usam `/<usuario>/<senha>/<id>.m3u8`. O renderer atual do cdnmnus reescreve
+somente a autoridade HTTP para `tvbrasil.phpd77.com` e preserva o caminho
+recebido. Portanto, ele oculta a origem, mas não transforma automaticamente o
+segundo formato em token opaco.
+
+Não é seguro resolver isso com um `sub_filter` fixo: ele não cria um
+mapeamento reversível, não pode armazenar credenciais em logs e pode quebrar
+tokens, query strings e URLs assinadas. A correção profissional exige uma
+camada de transformação de playlist com token opaco, expiração, revogação e
+broker de mídia que aceite o token sem devolver o caminho original ao cliente.
+Essa camada deve ser ativada somente depois de validar os fluxos HLS e VOD em
+ambos os hosts.
+
+O certificado de `cdn.phpd77.com` também não é herdado automaticamente por
+`tvbrasil.phpd77.com`: clientes TLS validam o nome solicitado. Como a zona é
+DNS-only, é necessário distribuir um certificado com SAN para cada hostname
+gerenciado, ou um wildcard apropriado; aliases em outra zona precisam estar
+incluídos no certificado das edges ou terminar TLS no provedor dessa zona.
+
 ## Objetivo
 
 Esta especificacao define como manter URLs estaveis da CDN enquanto tokens, redirects, hosts e IPs do XUI/LB permanecem exclusivamente internos.
@@ -401,11 +426,18 @@ Ainda depende de trabalho externo ou validacao prolongada:
 - [ ] carga externa sustentada atende ao SLO;
 - [ ] todas as falhas sao fail-closed.
 
-## Conclusao
+## Conclusao e limite atual
 
-E possivel renovar automaticamente tokens do LB sem expor o XUI. O broker local, o X-Accel-Redirect interno, a renovacao por TTL e o retry reativo foram implementados. O teste integrado consolidou 500 clientes sem `Location` ou header interno publico.
+O broker local, o `X-Accel-Redirect` interno, a renovacao por TTL e o retry
+reativo existem para o caminho legado e foram testados. Isso não significa que
+a transformação pública para `/play/<token>/m3u8` já exista: o renderer ainda
+aceita/encaminha manifestos no formato `/<usuario>/<senha>/<id>.m3u8`. A emissão
+de token opaco e o transformador de playlist continuam pendentes.
 
-O Nginx permanece no data plane e o broker somente no control plane. Para completar a meta `10/10`, faltam principalmente ACL/egress de rede, teste externo sustentado, DNS pinning mais forte e alta disponibilidade.
+O Nginx permanece no data plane e o broker somente no control plane. Para
+completar a meta `10/10`, faltam a transformação de manifesto, chaves de cache
+canônicas multi-XUI, ACL/egress de rede, teste externo sustentado, DNS pinning
+mais forte, fencing externo e alta disponibilidade real.
 
 ## Implementacao efetiva de 28/08/2026
 

@@ -1,0 +1,2 @@
+Defaults:cdn-admin env_reset
+cdn-admin ALL=(root) NOPASSWD: /opt/cdnmnus/scripts/cdnmnus-acme-helper *

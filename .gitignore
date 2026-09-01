@@ -41,6 +41,8 @@ id_ed25519*
 *.tar.zst
 *.m3u
 *.m3u8
+lab-player/reports/*
+!lab-player/reports/.gitkeep
 credentials/
 secrets/
 ansible/inventories/production/hosts.yml

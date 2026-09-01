@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.db import Database  # noqa: E402
+from core.control_plane import resolve_control_plane_host  # noqa: E402
 from core.node_onboarding import onboard_node  # noqa: E402
 from core.topology import TopologyStore  # noqa: E402
 
@@ -54,7 +55,7 @@ def main() -> int:
             ssh_port=int(payload["ssh_port"]), initial_user=str(payload["initial_user"]),
             password=password, role=str(payload["role"]),
             operator=f"menu-node-{requester[0]['id']}",
-            control_plane=os.environ.get("CDNMNUS_CONTROL_PLANE", "143.14.168.111"),
+            control_plane=resolve_control_plane_host(require_explicit=True),
         )
     finally:
         password = ""

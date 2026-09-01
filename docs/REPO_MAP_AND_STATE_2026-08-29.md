@@ -1,6 +1,6 @@
 # Mapa completo do repositório e estado real por área
 
-Data-base: 2026-08-29
+Data-base: 2026-09-01
 
 Este documento existe para responder uma pergunta simples: "o que este
 repositório realmente contém hoje?" Ele classifica os arquivos por função e por
@@ -32,7 +32,8 @@ O que já está confirmado no código:
 - a topologia autoritativa já controla nós, load balancers, backends e locks;
 - o laboratório `lab-player/` executa captura, seleção fixa e testes de playback;
 - a documentação já distingue produção, laboratório e contratos;
-- os testes agregados foram endurecidos para não vazar estado global.
+- os testes foram endurecidos para não vazar estado global; a última execução
+  teve 37 aprovações e 1 falha em `admin_web_test.py`.
 
 O que ainda continua sendo gate:
 
@@ -41,7 +42,9 @@ O que ainda continua sendo gate:
 - R2 de produção com restore comprovado;
 - alta disponibilidade real com segunda camada física confirmada;
 - PostgreSQL/failover de produção;
-- `.66` ACTIVE.
+- `.237` ACTIVE e `.111` STANDBY, ainda não publicados.
+- transformação efetiva de manifesto para `/play/<token>/m3u8`.
+- controlador contínuo de capacidade e fencing externo.
 
 ## 2. Árvore funcional do repositório
 
@@ -284,7 +287,7 @@ Função real:
 | Topologia | `core/topology.py` | Produção/contrato | Nó, LB, backend, lock, fencing |
 | Brokers/relay | `panel/token_broker.py`, `panel/vod_relay.py`, `panel/multi_tenant_broker.py` | Produção controlada | Isolamento e proteção de origem |
 | Laboratório VOD | `lab-player/*` | Laboratório real | Comparação CDN vs IP direto |
-| Failover/LB lab | `panel/cdnmnus-soak@.service`, `docs/LOAD_BALANCER_LAB_RUNBOOK.md` | Laboratório | Não confundir com LB ativo real |
+| Failover/LB | `core/topology.py`, `ansible/roles/load_balancer/*`, `docs/CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md` | Parcial/laboratório | Modelo e role existem; controlador contínuo, fencing e failover real continuam pendentes |
 | PostgreSQL | `core/postgres_lab.py`, docs de failover | Laboratório | Não é banco de produção atual |
 | Testes | `tests/*` | Produção de qualidade | Cobertura de regressão |
 

@@ -1,6 +1,6 @@
 # Estado real do projeto
 
-Data-base: 2026-08-31
+Data-base: 2026-09-01
 
 Este documento é a fotografia operacional do projeto. Ele deve ser atualizado
 sempre que houver mudança real no código, nos testes, no laboratório ou na
@@ -70,8 +70,34 @@ Regra de ouro:
   - bloqueio de promoção sem lease válido;
   - eventos sanitizados para auditoria.
 - A suíte de testes foi endurecida contra vazamento de estado global.
-- `python3 -m unittest discover -s tests -p '*test.py' -v` passou com 25 testes
-  na base atual.
+- A última execução de `python3 -m unittest discover -s tests -p '*test.py' -v`
+  executou 38 testes e todos passaram. `tests/admin_web_test.py` agora isola o
+  reconciliador Cloudflare e não depende de token/zona reais do host.
+- Operações de promoção, onboarding e menu exigem control-plane explícito por
+  `CDNMNUS_CONTROL_PLANE`, `control-plane.conf` ou `node-role.json`; o fallback
+  histórico para `.111` permanece somente para leitura compatível.
+- A role Ansible `node_menu` não possui mais default de control-plane: sem valor
+  explícito ela falha antes de gravar a identidade. O inventário de produção
+  continua declarando o valor de forma explícita; isso evita que o `.111` seja
+  herdado silenciosamente por um novo LB.
+- O comando read-only `scripts/cdnmnus-lb-candidate-preflight --node
+  45.140.192.237` foi implementado. Ele usa SSH estrito e `sudo -n` apenas para
+  leitura, nunca chama promoção, reload/restart, escrita SQLite ou API de DNS.
+- A execução read-only v2 em 2026-09-01 consultou Cloudflare sem mutação e não
+  encontrou o `.237` em seus registros; confirmou também `traffic_enabled=false`
+  por systemd, processo e listener. O HAProxy e o Nginx passaram na sintaxe.
+  As duas edges retornaram HTTP `421` ao probe `curl --resolve` com SNI
+  `cdn.phpd77.com`, indicando rejeição do hostname no vhost, não falha de TCP.
+  A release instalada no `.237` é `v0.5.0-managed-node.9`, enquanto o registry
+  aprova `.8`; o candidato segue bloqueado, sem capacidade, PEM referenciado ou
+  fencing externo.
+- O diagnóstico adicional confirmou a causa do health: as edges apresentam
+  certificado `CN/SAN=cdn.phpd77.com`, mas o tenant habilitado é
+  `tvbrasil.phpd77.com` com `tls_status=pending`. O vhost default rejeita
+  `cdn.phpd77.com` explicitamente com `421`; portanto o renderer agora deriva
+  `health_host` do canonical do tenant e não remove essa proteção. O próximo
+  write permitido é a emissão/distribuição de certificado correto por pipeline,
+  ainda sem promoção do `.237`.
 - `pytest` ainda não está disponível neste ambiente, então a verificação foi
   feita com `unittest` e compilação sintática.
 - O laboratório `lab-player/` existe e executa:
@@ -88,7 +114,51 @@ Regra de ouro:
 - O repositório agora possui um mapa funcional explícito em
   `docs/REPO_MAP_AND_STATE_2026-08-29.md`.
 
-## 2. Situação validada recentemente
+## 2. Topologia operacional atual
+
+Estado informado e adotado como fonte de verdade para a próxima janela:
+
+| Nó | Papel lógico | Estado | Condição operacional |
+| --- | --- | --- | --- |
+| `45.140.192.237` | `load_balancer` | `standby` | edge table `disabled`; release antiga de laboratório; sem capacidade, health, lease ou fencing ativo |
+| `143.14.168.111` | `load_balancer` | `candidate` | ainda não é `active`; não usar como edge publicada nem promover sem aprovação |
+| `143.14.168.168` | `edge` | `ready` | release atual validada, sujeita aos gates prolongados |
+| `143.14.168.170` | `edge` | `ready` | release atual validada, sujeita aos gates prolongados |
+
+Objetivo aprovado para a próxima topologia: `.237` como único LB
+`PRIMARY/ACTIVE` e `.111` como LB `STANDBY`, com `.168/.170` como edges.
+Antes de executar isso, o control-plane precisa ter identidade própria e não
+depender implicitamente de `.111`; o modelo de papel é exclusivo por nó.
+
+Não existe lease/fencing ativo, health recente ou capacidade declarada para o
+`.237`. Portanto ele é candidato operacional, não LB de produção.
+
+### Registro efetivo no banco autoritativo
+
+A conferência do banco local em 2026-09-01 encontrou o registro já existente,
+sem necessidade de novo `INSERT`:
+
+| Entidade | Registro real |
+| --- | --- |
+| Nó LB candidato | `nodes.id=4`, IPv4 `45.140.192.237`, papel `load_balancer`, estado `standby` |
+| LB | `load_balancers.id=lb-4`, `node_id=4`, modo `active_standby`, estado `standby` |
+| Backend 1 | `lb_backends.lb-4 -> nodes.id=2`, IPv4 `143.14.168.168`, `enabled` |
+| Backend 2 | `lb_backends.lb-4 -> nodes.id=3`, IPv4 `143.14.168.170`, `enabled` |
+| Proteção | zero LB `active`, zero `promotion_locks` |
+
+O modelo usa IDs lógicos (`4`, `2`, `3`) e guarda o IPv4 em `nodes.ipv4`; não
+aceita o IPv4 como `node_id`. Além disso, os backends reais são
+`143.14.168.168` e `143.14.168.170`. Os endereços `45.140.192.168` e
+`45.140.192.170` não aparecem na topologia autoritativa e não devem ser
+cadastrados por suposição.
+
+O inventário agora declara `lb_candidate_237` no grupo `load_balancers`, com
+`cdnmnus_node_state: standby`, control-plane explícito `.111` e sem qualquer
+ação de promoção. Antes da alteração, o playbook de LB não encontrava alvo
+porque esse grupo não existia; a declaração de inventário, por si só, não
+inicia HAProxy nem publica tráfego.
+
+## 3. Situação validada recentemente
 
 - Regras UFW e persistência de boot conferidas nas máquinas `.111`, `.168` e
   `.170`; todas estão ativas.
@@ -133,7 +203,7 @@ Regra de ouro:
 - O fluxo de sincronização baixa novamente a playlist antes de cada execução
   do validador, para evitar drift entre capturas.
 
-## 3. O que está pronto
+## 4. O que está pronto
 
 - contrato de nó;
 - menu unificado;
@@ -142,7 +212,7 @@ Regra de ouro:
 - laboratório de playback;
 - documentação de leitura e execução;
 - mapa funcional do repositório;
-- testes agregados estáveis em `unittest discover`.
+- 38 de 38 testes agregados na última execução.
 - relay VOD convergente em `.168/.170`, com rollback real aprovado na canária.
 - onboarding futuro fail-closed: novas edges entram em `bootstrapping`, passam
   por preflight, release imutável, ativação, auditoria de broker/relay/health e
@@ -162,7 +232,7 @@ Regra de ouro:
   só prepara `candidate`/`standby`. A homologação remota integral permanece
   pendente na VPS descartável.
 
-## 4. O que ainda é gate de produção
+## 5. O que ainda é gate de produção
 
 - `.111/.170` sob carga representativa e soak prolongado;
 - ensaio de reinserção do RRset Cloudflare;
@@ -170,11 +240,16 @@ Regra de ouro:
   três horas e soak mínimo de seis horas;
 - PostgreSQL/failover real;
 - promoção edge -> LB em produção;
-- `.66` ACTIVE.
+- `.237` ACTIVE.
+- `.111` STANDBY.
+- certificado cobrindo todos os hosts publicados;
+- transformação efetiva para `/play/<token>/m3u8`;
+- controlador contínuo de capacidade/health;
+- fencing externo e failover real.
 - qualquer mudança de write em Cloudflare ou R2 sem contrato separado e sem
   restore comprovado.
 
-## 5. Pontos de atenção do código real
+## 6. Pontos de atenção do código real
 
 - `core/topology.py` já tem compatibilidade com a assinatura antiga e a nova
   dos métodos de lock/promoção; isso é útil para migração, mas deve ser mantido
@@ -184,20 +259,20 @@ Regra de ouro:
 - A política de UFW foi amarrada ao fluxo de ativação e ao instalador para
   preservar `22/80/443` públicos em todos os nós. A exceção `1455/tcp` é específica
   da `.111` e não faz parte do baseline genérico.
-- A `.111` será o primeiro load balancer do sistema, mas hoje continua apenas
-  `candidate`: não existe backend registrado em `lb_backends` e a promoção
-  real/HAProxy continuam sujeitas aos gates de produção.
+- O `.237` é o alvo primário informado para LB, mas hoje continua `standby`
+  operacional: release, capacidade, health, lease e fencing ainda precisam ser
+  comprovados. O `.111` continua `candidate` até ser preparado como standby.
 - `panel/` ainda existe como superfície de broker/relay e precisa ser entendido
   como contrato de runtime, não como fonte única de verdade para operação.
 - O relay Python passou a validação funcional real e carga curta, mas os gates
   de capacidade prolongada, backpressure e soak continuam abertos; `ready`
-  não autoriza por si só a promoção da `.66` nem mudança de DNS.
+  não autoriza por si só a promoção do `.237` nem mudança de DNS.
 - O laboratório `lab-player/` é agora parte da receita operacional e não deve
   ser tratado como artefato descartável.
 - `docs/REPO_MAP_AND_STATE_2026-08-29.md` é a melhor visão de alto nível para
   distinguir produção, laboratório, contrato e legado.
 
-## 6. Forma obrigatória de usar este arquivo
+## 7. Forma obrigatória de usar este arquivo
 
 Antes de abrir outro documento operacional, confira se este arquivo está
 atualizado.

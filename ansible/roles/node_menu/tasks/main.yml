@@ -5,7 +5,9 @@
       - cdnmnus_node_id | string is match('^[1-9][0-9]*$')
       - cdnmnus_node_role in ['control_plane', 'edge', 'load_balancer']
       - cdnmnus_node_state | length > 0
+      - cdnmnus_control_plane_host | length > 0
       - cdnmnus_control_plane_host is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+      - cdnmnus_node_role != 'load_balancer' or cdnmnus_control_plane_host != ansible_host
     quiet: true
 
 - name: Garantir diretório de identidade do nó
@@ -128,6 +130,70 @@
     mode: '0755'
   when: cdnmnus_node_id | string == '1'
 
+- name: Instalar snapshot de cluster no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/cluster_status.py"
+    dest: /usr/local/sbin/cdnmnus-cluster-status
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar auditoria read-only do LB candidato no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/lb_candidate_preflight.py"
+    dest: /usr/local/sbin/cdnmnus-lb-candidate-preflight
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar auditoria read-only de release gerenciada no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/reconcile_managed_node_release.py"
+    dest: /usr/local/sbin/cdnmnus-reconcile-managed-release.py
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar receptor de amostras de capacidade no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/submit_capacity_sample.py"
+    dest: /usr/local/sbin/cdnmnus-submit-capacity-sample
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar receptor de perfil de capacidade no control plane
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/submit_capacity_profile.py"
+    dest: /usr/local/sbin/cdnmnus-submit-capacity-profile
+    owner: root
+    group: root
+    mode: '0755'
+  when: cdnmnus_node_id | string == '1'
+
+- name: Instalar helper ACME privilegiado e determinístico
+  ansible.builtin.copy:
+    src: cdnmnus-acme-helper
+    dest: /opt/cdnmnus/scripts/cdnmnus-acme-helper
+    owner: root
+    group: root
+    mode: '0750'
+  when: cdnmnus_node_role == 'control_plane'
+
+- name: Instalar sudoers mínimo do helper ACME
+  ansible.builtin.copy:
+    src: cdnmnus-acme.sudoers
+    dest: /etc/sudoers.d/cdnmnus-acme
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s
+  when: cdnmnus_node_role == 'control_plane'
+
 - name: Garantir usuário operacional no control plane
   ansible.builtin.user:
     name: cdn-deploy
@@ -150,6 +216,11 @@
       Defaults:cdn-deploy env_keep += "SSH_CONNECTION"
       cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-promotion-request *
       cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-node-onboarding
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-cluster-status
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-lb-candidate-preflight
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-reconcile-managed-release.py
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-capacity-sample
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-submit-capacity-profile
     dest: /etc/sudoers.d/cdn-deploy
     owner: root
     group: root

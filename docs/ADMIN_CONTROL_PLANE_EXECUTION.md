@@ -239,7 +239,7 @@ WorkingDirectory=/opt/cdnmnus
 EnvironmentFile=/etc/cdnmnus/admin.env
 Environment="PYTHONPATH=/opt/cdnmnus"
 Environment="PATH=/opt/cdnmnus/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh
+ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt
 ```
 
 E os comandos:

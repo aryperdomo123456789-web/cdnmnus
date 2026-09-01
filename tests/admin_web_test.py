@@ -9,6 +9,7 @@ import tempfile
 import threading
 from http.client import HTTPConnection
 from pathlib import Path
+from unittest.mock import patch
 
 _original_admin_password = os.environ.get("CDNMNUS_ADMIN_PASSWORD")
 os.environ["CDNMNUS_ADMIN_PASSWORD"] = "test-password"
@@ -48,9 +49,12 @@ try:
     status, page = request("GET", "/")
     assert status == 200 and "Gerenciar Edges" in page and "Configuração local" in page
     assert request("POST", "/api/tenants", {"id": "xui1"}, csrf=False)[0] == 403
-    status, data = request("POST", "/api/tenants", {"id": "xui1", "name": "Um", "canonical_host": "xui1.test", "origin_host": "origin.test", "origin_port": 80, "load_balancers": []})
-    assert status == 201 and json.loads(data)["tenant"]["id"] == "xui1"
-    assert request("POST", "/api/cnames", {"tenant_id": "xui1", "hostname": "cliente.test"})[0] == 201
+    # O endpoint deve ser testado sem depender de token/zona Cloudflare
+    # presentes no host onde a suíte é executada.
+    with patch.object(mod, "reconcile_cluster_dns", return_value={"pool": [], "aliases": []}):
+        status, data = request("POST", "/api/tenants", {"id": "xui1", "name": "Um", "canonical_host": "xui1.test", "origin_host": "origin.test", "origin_port": 80, "load_balancers": []})
+        assert status == 201 and json.loads(data)["tenant"]["id"] == "xui1"
+        assert request("POST", "/api/cnames", {"tenant_id": "xui1", "hostname": "cliente.test"})[0] == 201
     assert request("POST", "/api/settings/port", {"port": 8443})[0] == 200
     assert mod.DB.setting("web_port") == 8443
     status, state = request("GET", "/api/state")

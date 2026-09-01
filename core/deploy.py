@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,84 @@ from typing import Any
 
 from core.db import Database
 from core.render_tenants import broker_snapshot, render_all
+
+
+def tenant_deployment_contexts(tenants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Constrói contextos fechados de deployment, um por tenant habilitado.
+
+    Nenhuma propriedade de origem, health, VOD ou LB é compartilhada entre
+    tenants. O resultado é serializável para Ansible e serve também como
+    contrato de teste. O chamador deve preservar a lista inteira; selecionar
+    um tenant específico exige um ID explícito.
+    """
+    contexts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tenant in tenants:
+        tenant_id = str(tenant["id"])
+        if tenant_id in seen:
+            raise ValueError(f"tenant duplicado no deployment: {tenant_id}")
+        seen.add(tenant_id)
+        origins = [item for item in tenant.get("upstreams", []) if item["kind"] == "origin"]
+        if len(origins) != 1:
+            raise ValueError(f"tenant {tenant_id} precisa de exatamente uma origem")
+        health_host = str(tenant.get("health_host") or tenant["canonical_host"])
+        contexts.append({
+            "tenant_id": tenant_id,
+            "canonical_host": str(tenant["canonical_host"]),
+            "health_host": health_host,
+            "hosts": [str(item["hostname"]) for item in tenant.get("hosts", [])],
+            "origin": {"host": origins[0]["host"], "port": origins[0]["port"]},
+            "load_balancers": [
+                {"host": item["host"], "port": item["port"]}
+                for item in tenant.get("upstreams", []) if item["kind"] == "lb"
+            ],
+            "vod": [
+                {"host": item["host"], "port": item["port"]}
+                for item in tenant.get("upstreams", []) if item["kind"] == "vod"
+            ],
+            "certificate_dir": f"/etc/letsencrypt/live/{tenant['canonical_host']}",
+        })
+    return contexts
+
+
+def _external_alias_context(db: Database, contexts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Obtém o tenant do alias externo por configuração explícita.
+
+    A compatibilidade automática só é permitida quando há exatamente um
+    tenant. Com múltiplos tenants, a ausência do ID é erro deliberado para
+    impedir que um XUI herde a origem de outro.
+    """
+    configured_id = db.setting("external_alias_tenant_id")
+    if configured_id:
+        selected = [item for item in contexts if item["tenant_id"] == str(configured_id)]
+        if len(selected) != 1:
+            raise ValueError("external_alias_tenant_id não corresponde a tenant habilitado")
+        return selected[0]
+    if len(contexts) == 1:
+        return next(iter(contexts))
+    raise ValueError("múltiplos tenants exigem external_alias_tenant_id explícito")
+
+
+def _ssh_key_for_edge(edge: dict[str, Any], key_dir: Path) -> Path:
+    """Use numeric keys for new nodes and legacy inventory keys after migration."""
+    numeric = key_dir / f"{edge['id']}.ed25519"
+    if numeric.is_file():
+        return numeric
+    inventory = Path(__file__).resolve().parents[1] / "ansible/inventories/production/hosts.yml"
+    if inventory.is_file():
+        lines = inventory.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for index, line in enumerate(lines):
+            if f"ansible_host: {edge['ipv4']}" not in line:
+                continue
+            for candidate in lines[index:index + 8]:
+                match = re.search(r"ansible_ssh_private_key_file:\s*(\S+)", candidate)
+                if match:
+                    path = Path(match.group(1))
+                    if path.is_file():
+                        return path
+    # Keep inventory generation compatible with dry-run/test fixtures that
+    # intentionally use placeholder key paths; Ansible will validate access.
+    return numeric
 
 
 def _release_digest(files: dict[str, str]) -> str:
@@ -102,7 +181,7 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
             continue
         if edge_ids is not None and edge["id"] not in edge_ids:
             continue
-        key_path = Path(key_dir) / f"{edge['id']}.ed25519"
+        key_path = _ssh_key_for_edge(edge, Path(key_dir))
         hosts[edge["id"]] = {
             "ansible_host": edge["ipv4"], "ansible_port": edge["ssh_port"],
             "ansible_user": "cdn-deploy", "ansible_become": True,
@@ -182,16 +261,23 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
     tenants = db.tenants(enabled_only=True)
     if not tenants:
         raise ValueError("nenhum tenant habilitado para ativação da edge")
+    contexts = tenant_deployment_contexts(tenants)
+    alias = _external_alias_context(db, contexts)
     command = ["ansible-playbook", "-i", str(inventory), str(playbook),
                "--extra-vars", json.dumps({
                    "release_id": deployment["release_id"],
                    "release_source": deployment["artifact_path"],
                    "config_digest": deployment["config_digest"],
-                   "canonical_health_host": tenants[0]["canonical_host"],
-                   "tenant_ids": [item["id"] for item in tenants],
-                   "vod_tenant_ids": [item["id"] for item in tenants
-                                      if any(upstream["kind"] == "vod" for upstream in item.get("upstreams", []))],
-                   "tenant_health_hosts": [{"host": item["canonical_host"]} for item in tenants],
+                   "tenant_contexts": contexts,
+                   "canonical_health_host": alias["health_host"],
+                   "external_alias_tenant_id": alias["tenant_id"],
+                   "external_alias_origin_host": alias["origin"]["host"],
+                   "external_alias_origin_port": alias["origin"]["port"],
+                   "external_alias_load_balancers": alias["load_balancers"],
+                   "external_alias_has_vod": bool(alias["vod"]),
+                   "tenant_ids": [item["tenant_id"] for item in contexts],
+                   "vod_tenant_ids": [item["tenant_id"] for item in contexts if item["vod"]],
+                   "tenant_health_hosts": [{"host": item["health_host"]} for item in contexts],
                })]
     onboarding_edges = [
         edge for edge in db.edges()
@@ -200,7 +286,12 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         and edge["id"] in managed_edge_ids
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=3600, check=False)
+        ansible_environment = os.environ.copy()
+        ansible_environment["ANSIBLE_CONFIG"] = str(Path(__file__).resolve().parents[1] / "ansible/ansible.cfg")
+        result = subprocess.run(
+            command, cwd=Path(__file__).resolve().parents[1], env=ansible_environment,
+            capture_output=True, text=True, timeout=3600, check=False,
+        )
     finally:
         if generated_inventory is not None:
             generated_inventory.unlink(missing_ok=True)

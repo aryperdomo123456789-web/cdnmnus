@@ -18,6 +18,8 @@ from core.db import Database, normalize_id
 from core.deploy import deploy_serial
 from core.edge_manager import bootstrap_edge, converge_ssh_mesh, scan_host_identity
 from core.render_tenants import render_tenant
+from core.dns_reconciler import reconcile_cluster_dns
+from core.cloudflare_dns import CloudflareError
 
 
 def ask(value: str | None, label: str, default: str | None = None) -> str:
@@ -80,12 +82,22 @@ def tenant_add(args: argparse.Namespace, db: Database) -> None:
     raw_lbs = args.lb or input("Load balancers separados por vírgula (opcional): ").strip()
     lbs = [item.strip() for item in raw_lbs.split(",") if item.strip()]
     tenant = db.add_tenant(tenant_id, name, canonical, origin, port, lbs)
-    print(f"Tenant {tenant['id']} criado com versão {tenant['config_version']}.")
+    try:
+        result = reconcile_cluster_dns(db, operator="admin-cli")
+        print(f"Tenant {tenant['id']} criado e Cloudflare reconciliado ({len(result['aliases'])} aliases).")
+    except CloudflareError as exc:
+        print(f"Tenant {tenant['id']} salvo localmente; Cloudflare não aplicado: {exc}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def tenant_cname(args: argparse.Namespace, db: Database) -> None:
     result = db.add_cname(ask(args.tenant, "ID do tenant"), ask(args.hostname, "CNAME/alias"))
-    print(f"Alias {result['hostname']} associado a {result['tenant_id']}; TLS pendente.")
+    try:
+        reconcile_cluster_dns(db, operator="admin-cli")
+    except CloudflareError as exc:
+        print(f"Alias salvo localmente; Cloudflare não aplicado: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    print(f"Alias {result['hostname']} associado a {result['tenant_id']}; Cloudflare DNS-only aplicado.")
 
 
 def tenant_list(_: argparse.Namespace, db: Database) -> None:
@@ -140,6 +152,7 @@ def parser() -> argparse.ArgumentParser:
     show = tenant.add_parser("show-vhost"); show.add_argument("tenant"); show.set_defaults(handler=tenant_show)
     dns = commands.add_parser("dns").add_subparsers(dest="command", required=True)
     sync = dns.add_parser("sync"); sync.add_argument("--script"); sync.set_defaults(handler=dns_sync)
+    dns.add_parser("cloudflare-reconcile").set_defaults(handler=lambda args, db: print(json.dumps(reconcile_cluster_dns(db, operator="admin-cli"), ensure_ascii=False, indent=2)))
     dep = commands.add_parser("deploy"); dep.add_argument("--inventory", default=None, help="opcional; por padrão é gerado do SQLite"); dep.add_argument("--playbook", default="ansible/playbooks/deploy-edge.yml"); dep.add_argument("--release-root", default="/var/lib/cdnmnus-admin/releases"); dep.set_defaults(handler=deploy)
     config = commands.add_parser("config").add_subparsers(dest="command", required=True)
     port = config.add_parser("web-port"); port.add_argument("port", type=int); port.set_defaults(handler=config_port)

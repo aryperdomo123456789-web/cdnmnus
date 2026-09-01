@@ -1,10 +1,16 @@
 # Índice documental e receita operacional
 
-Data-base: 2026-08-29
+Data-base: 2026-09-01
 
 Este documento existe para reduzir ambiguidade. Ele organiza a documentação
 atual em uma ordem de leitura e de execução que acompanha o estado real do
 repositório.
+
+Documentos com data anterior continuam disponíveis como evidência histórica.
+Eles não devem ser usados para afirmar o estado atual quando divergirem de
+[STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md). As receitas normativas
+atuais são o runbook de produção, a receita de capacidade, a receita de
+certificados/tokens/cache e o runbook Cloudflare atualizado.
 
 ## 1. Verdade operacional atual
 
@@ -18,9 +24,12 @@ Leia primeiro estes documentos, nesta ordem:
 6. [NUMERIC_NODE_ID_MIGRATION_2026-08-29.md](NUMERIC_NODE_ID_MIGRATION_2026-08-29.md)
 7. [NODE_LOCAL_MENU_AND_ROLE_PROMOTION.md](NODE_LOCAL_MENU_AND_ROLE_PROMOTION.md)
 8. [CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md](CLOUDFLARE_DNS_R2_PRODUCTION_RUNBOOK.md)
-9. [VOD_PLAYER_VALIDATION_2026-08-28.md](VOD_PLAYER_VALIDATION_2026-08-28.md)
-10. [VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md)
-11. [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md)
+9. [CLOUDFLARE_API_AUTOMATION_RECIPE.md](CLOUDFLARE_API_AUTOMATION_RECIPE.md)
+10. [VOD_PLAYER_VALIDATION_2026-08-28.md](VOD_PLAYER_VALIDATION_2026-08-28.md)
+11. [VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md](VOD_PRIVATE_REDIRECT_RELAY_IMPLEMENTATION.md)
+12. [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md)
+13. [RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md)
+14. [runbooks/tls_tenant_distribution.md](runbooks/tls_tenant_distribution.md)
 
 Esses documentos cobrem:
 
@@ -75,6 +84,7 @@ Use:
 - [VOD_RELAY_CANARY_RUNBOOK_2026-08-28.md](VOD_RELAY_CANARY_RUNBOOK_2026-08-28.md)
 - [VOD_DELIVERY_CURRENT_STATE_2026-08-28.md](VOD_DELIVERY_CURRENT_STATE_2026-08-28.md)
 - [NGINX_UPSTREAM_RESOLUTION_AUDIT_2026-08-28.md](NGINX_UPSTREAM_RESOLUTION_AUDIT_2026-08-28.md)
+- [RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md)
 
 ### Frente F: PostgreSQL e failover
 
@@ -92,9 +102,16 @@ Ordem recomendada de execução:
 4. Sincronizar o contrato comum do nó em todas as VPS.
 5. Validar o laboratório `lab-player/` e fixar as amostras de teste.
 6. Consolidar o modelo autoritativo de nós, LBs e locks.
-7. Somente depois avançar Cloudflare write, R2 e promoção edge -> LB.
+7. Configurar o token mínimo e as zonas autorizadas seguindo
+   [CLOUDFLARE_API_AUTOMATION_RECIPE.md](CLOUDFLARE_API_AUTOMATION_RECIPE.md).
+8. Reconciliar Cloudflare e executar o laboratório CNAME antes de publicar novos aliases.
 
 ## 4. Laboratório de testes
+
+Para aliases CNAME DNS-only, siga também a receita executável
+[CNAME_DNS_ONLY_AND_LAB_RECIPE.md](CNAME_DNS_ONLY_AND_LAB_RECIPE.md). Ela
+adiciona a camada `--cname` ao laboratório e valida o fluxo de uma aplicação
+real, incluindo `Range` VOD e sanitização de credenciais.
 
 O laboratório oficial fica em:
 
@@ -115,14 +132,14 @@ Ele serve para:
 Até a `.168` passar pelo canário real e os locks/fencing estarem validados, não
 deve ser tratado como pronto:
 
-- `.66` ACTIVE;
+- `.237` ACTIVE;
 - promoção edge -> LB em produção;
 - Cloudflare write de produção;
 - backup R2 de produção sem restore comprovado;
 - qualquer cópia de SQLite entre VPS;
 - split-brain ou active/active sem a fase de avaliação descrita no runbook.
 
-## 6. Documento a criar depois
+## 6. Documentos de referência contínua
 
 Depois que esta base estiver estável, o próximo documento útil é um
 "contratos reais do código" reunindo:
@@ -135,3 +152,8 @@ Depois que esta base estiver estável, o próximo documento útil é um
 
 Para a evolução de capacidade, pesos, onboarding automático e failover entre
 LBs, use agora [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md).
+
+Para certificados que cubrem novos subdomínios, transformação de playlists
+legadas em `/play/<token>/m3u8`, isolamento multi-XUI e abertura rápida com o
+cache existente, use
+[RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md).

@@ -1,6 +1,11 @@
 # Menu local e promoção segura de nós
 
 **Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
+
+Operações de onboarding e promoção exigem o endereço explícito do
+control-plane em `CDNMNUS_CONTROL_PLANE`, `/etc/cdnmnus/control-plane.conf` ou
+`/etc/cdnmnus/node-role.json`. O fallback histórico para `143.14.168.111` é
+somente compatibilidade de leitura e não pode autorizar uma operação.
 Atualize esse arquivo sempre que o contrato de nó, menu ou promoção mudar.
 
 ## Estado atual

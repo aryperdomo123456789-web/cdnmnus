@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.db import Database
+from core.control_plane import ControlPlaneIdentityError, resolve_control_plane_host
 from core.edge_manager import HostIdentity
 from core.node_onboarding import onboard_node
 from core.topology import TopologyStore
@@ -64,6 +65,7 @@ class NodeOnboardingTest(unittest.TestCase):
         root = Path(__file__).parents[1]
         menu = (root / "ansible/roles/node_menu/files/node_menu.py").read_text()
         receiver = (root / "scripts/submit_node_onboarding.py").read_text()
+        cli = (root / "cli/mago_cdn.py").read_text()
         mesh = (root / "scripts/converge_ssh_mesh.py").read_text()
         local_identity = mesh.split("def ensure_local_identity", 1)[1].split(
             "def ensure_remote_identity", 1
@@ -71,8 +73,20 @@ class NodeOnboardingTest(unittest.TestCase):
         self.assertIn("json.dumps(payload)", menu)
         self.assertIn("input=input_text", menu)
         self.assertIn('payload.pop("password")', receiver)
+        self.assertIn("resolve_control_plane_host", receiver)
+        self.assertIn("resolve_control_plane_host", cli)
         self.assertNotIn('"--password",', menu)
+        self.assertNotIn('control_plane="143.14.168.111"', receiver)
         self.assertNotIn("NOPASSWD: ALL", local_identity)
+
+    def test_control_plane_identity_is_explicit_for_operations(self) -> None:
+        with patch.dict("os.environ", {"CDNMNUS_CONTROL_PLANE": "198.51.100.10"}, clear=False):
+            self.assertEqual(resolve_control_plane_host(require_explicit=True), "198.51.100.10")
+        with patch.dict("os.environ", {"CDNMNUS_CONTROL_PLANE": ""}, clear=False), \
+                patch("core.control_plane._host_from_control_plane_conf", return_value=None), \
+                patch("core.control_plane._host_from_node_role", return_value=None):
+            with self.assertRaises(ControlPlaneIdentityError):
+                resolve_control_plane_host(require_explicit=True)
 
 
 if __name__ == "__main__":

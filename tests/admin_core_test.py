@@ -10,7 +10,8 @@ from unittest.mock import patch
 from pathlib import Path
 
 from core.db import Database
-from core.deploy import _inventory, build_release, claim_deployment, queue_deployment, run_deployment
+from core.deploy import (_inventory, build_release, claim_deployment, queue_deployment,
+                         run_deployment, tenant_deployment_contexts)
 from core.render_tenants import broker_snapshot, render_all, render_tenant
 from core.topology import TopologyStore
 
@@ -24,7 +25,15 @@ with tempfile.TemporaryDirectory() as root:
     xui1 = db.add_tenant("xui1", "XUI Um", "xui1.cdn.test", "origin1.test", 80, ["lb1.test"])
     db.add_cname("xui1", "cliente.test")
     xui2 = db.add_tenant("xui2", "XUI Dois", "xui2.cdn.test", "origin2.test", 8080, [])
-    assert len(db.tenants()) == 2
+    xui3 = db.add_tenant("xui3", "XUI IP", "xui3.cdn.test", "173.208.244.139", 80, [])
+    assert xui3["upstreams"][0]["host"] == "173.208.244.139"
+    assert len(db.tenants()) == 3
+    contexts = tenant_deployment_contexts(db.tenants(enabled_only=True))
+    assert [item["tenant_id"] for item in contexts] == ["xui1", "xui2", "xui3"]
+    assert contexts[0]["origin"]["host"] == "origin1.test"
+    assert contexts[1]["origin"]["host"] == "origin2.test"
+    assert contexts[2]["origin"]["host"] == "173.208.244.139"
+    assert len({item["certificate_dir"] for item in contexts}) == 3
 
     output = render_tenant(db.tenant("xui1"))
     assert output.relative_path == "tenants/xui1.conf"
@@ -33,6 +42,8 @@ with tempfile.TemporaryDirectory() as root:
     assert "server_name xui1.cdn.test cliente.test" in output.content
     assert "location ^~ /__cdnmnus_xui1_origin/" in output.content and "internal;" in output.content
     assert "location ^~ /__cdnmnus_xui1_lb_0/" in output.content
+    assert "location = /get.php" in output.content
+    assert "sub_filter 'http://origin1.test:80' 'http://xui1.cdn.test';" in output.content
     assert output.content == render_tenant(db.tenant("xui1")).content
 
     no_vod_output = render_tenant(db.tenant("xui2")).content
@@ -40,7 +51,7 @@ with tempfile.TemporaryDirectory() as root:
     assert "location ~ ^/(?:movie|series)/" in no_vod_output and "return 503;" in no_vod_output
 
     rendered = render_all(db.tenants())
-    assert sorted(rendered) == ["tenants/xui1.conf", "tenants/xui2.conf"]
+    assert sorted(rendered) == ["tenants/xui1.conf", "tenants/xui2.conf", "tenants/xui3.conf"]
     snapshot = json.loads(broker_snapshot(db.tenants(), 2))
     assert snapshot["tenants"]["xui1"]["origin"]["host"] == "origin1.test"
 
@@ -89,6 +100,9 @@ with tempfile.TemporaryDirectory() as root:
     queued = queue_deployment(db, Path(root) / "releases")
     claimed = claim_deployment(db)
     assert queued["state"] == "queued" and claimed is not None and claimed["id"] == queued["deployment_id"]
+    # O fallback externo é uma escolha operacional explícita quando há vários
+    # tenants; nunca deve ser inferido pelo índice da lista.
+    db.set_setting("external_alias_tenant_id", "xui1")
 
     # Onboarding gerenciado é o único deployment que admite bootstrapping.
     topology = TopologyStore(db)

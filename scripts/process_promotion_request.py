@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.db import Database  # noqa: E402
+from core.control_plane import resolve_control_plane_host  # noqa: E402
 from core.topology import TopologyStore  # noqa: E402
 
 
@@ -90,7 +91,7 @@ def main() -> int:
                 "cdnmnus_node_name": edge["name"],
                 "cdnmnus_release_id": topology_node.get("release_id") or "",
                 "cdnmnus_config_digest": topology_node.get("node_config_digest") or "",
-                "cdnmnus_control_plane_host": "143.14.168.111",
+                "cdnmnus_control_plane_host": resolve_control_plane_host(require_explicit=True),
             }
         }}}}
     }
