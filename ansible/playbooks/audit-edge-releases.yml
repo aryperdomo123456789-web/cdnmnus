@@ -98,13 +98,16 @@
       loop: "{{ audit_vod_tenant_ids }}"
       changed_when: false
 
-    - name: Validar health local de cada tenant
-      ansible.builtin.uri:
-        url: https://127.0.0.1/edge-health
-        headers:
-          Host: "{{ item }}"
-        validate_certs: false
-        status_code: 200
+    - name: Validar health local de cada tenant com TLS e SNI reais
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --fail
+          - --resolve
+          - "{{ item }}:443:127.0.0.1"
+          - "https://{{ item }}/edge-health"
       loop: "{{ audit_health_hosts }}"
       changed_when: false
 
