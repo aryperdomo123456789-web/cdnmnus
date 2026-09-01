@@ -16,6 +16,10 @@ source "${CREDENTIALS_FILE}"
 : "${PLAYER_PASSWORD:?PLAYER_PASSWORD ausente}"
 : "${PLAYER_BASE_DIRECT:?PLAYER_BASE_DIRECT ausente}"
 : "${PLAYER_BASE_CNAME:?PLAYER_BASE_CNAME ausente}"
+: "${PLAYER_BASE_CDN:?PLAYER_BASE_CDN ausente}"
+
+# Export only the validated values to the Python subprocess.
+export PLAYER_USERNAME PLAYER_PASSWORD PLAYER_BASE_DIRECT PLAYER_BASE_CNAME PLAYER_BASE_CDN
 
 export LAB_DIR PLAYER_CREDENTIALS_FILE
 exec python3 "${LAB_DIR}/scripts/test_playback_flow.py" --cname --refresh-samples
