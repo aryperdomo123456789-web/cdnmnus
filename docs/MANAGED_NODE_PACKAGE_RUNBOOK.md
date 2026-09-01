@@ -47,8 +47,29 @@ valida digest, ativa broker/relay/Nginx, audita e só então marca `ready`.
 ## Cadastro por qualquer menu SSH
 
 O operador não precisa abrir console do provedor nem executar comandos na VPS.
-Em qualquer edge/LB já admitido na malha, a opção **Cadastrar nova máquina
-(Edge ou Load Balancer)** solicita somente:
+Em qualquer edge/LB já admitido na malha, a opção **Adicionar nova Edge
+(cadastro mínimo: IP/SSH)** solicita somente (tanto no menu central quanto no
+menu SSH local):
+
+- IPv4 público global;
+- porta SSH (22 por padrão);
+- usuário SSH inicial (`root` por padrão);
+- senha inicial, em campo oculto.
+
+Nesse caminho o papel é `edge` e o nome amigável é derivado do IP (por exemplo,
+`8-8-4-4` vira `edge-8-8-4-4`). Não é necessário cadastrar nome,
+papel ou control plane manualmente. O cadastro avançado **Cadastrar Edge ou
+Load Balancer** continua disponível para o caso operacional que realmente
+precise de um LB candidate.
+
+O caminho mínimo não é um instalador cego: antes de conectar ele exige
+confirmação do resumo e depois executa os mesmos gates do onboarding completo.
+
+O menu envia os quatro dados operacionais para o onboarding; os demais valores
+são preenchidos pelo control plane a partir da configuração root-only e da
+release aprovada. A senha inicial não vira configuração persistente.
+
+O cadastro avançado solicita:
 
 - papel inicial (`edge` ou `load_balancer`);
 - nome, IPv4, porta e usuário SSH inicial;

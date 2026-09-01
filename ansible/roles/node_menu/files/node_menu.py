@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Cliente local comum; diagnóstico sem criar uma fonte de verdade paralela."""
 import json
+import ipaddress
 import os
 import shlex
 import ssl
@@ -429,13 +430,34 @@ def cname_lab():
 
 
 def request_node_onboarding(host):
-    code, role = dialog(["--menu", "Papel inicial da nova máquina", "14", "82", "2",
-                         "edge", "Cadastrar como Edge",
-                         "load_balancer", "Cadastrar diretamente como LB candidate"])
+    code, mode = dialog(["--menu", "Tipo de cadastro", "14", "82", "2",
+                         "edge_minimal", "Nova Edge — cadastro mínimo IP/SSH",
+                         "advanced", "Cadastro avançado Edge/LB"])
     if code != 0:
         return
-    name = ask("Nome amigável da nova máquina")
     ipv4 = ask("IPv4 público da nova máquina")
+    if ipv4 is None:
+        return
+    if mode == "edge_minimal":
+        try:
+            address = ipaddress.ip_address(ipv4.strip())
+            if address.version != 4 or not address.is_global:
+                raise ValueError
+        except ValueError:
+            message("Informe um IPv4 público global. Hostname, IPv6 e IP privado não são aceitos.")
+            return
+        ipv4 = str(address)
+        name = "edge-" + ipv4.replace(".", "-")
+        role = "edge"
+    else:
+        role_code, role = dialog(["--menu", "Papel inicial da nova máquina", "14", "82", "2",
+                                  "edge", "Cadastrar como Edge",
+                                  "load_balancer", "Cadastrar diretamente como LB candidate"])
+        if role_code != 0:
+            return
+        name = ask("Nome amigável da nova máquina")
+        if name is None:
+            return
     port = ask("Porta SSH", "22")
     initial_user = ask("Usuário SSH inicial", "root")
     password = ask("Senha SSH inicial — usada uma vez e nunca armazenada", password=True)
@@ -445,7 +467,6 @@ def request_node_onboarding(host):
         "name": name.strip(), "ipv4": ipv4.strip(), "ssh_port": int(port),
         "initial_user": initial_user.strip(), "password": password, "role": role,
     }
-    password = ""
     code, _ = dialog([
         "--yesno",
         f"Cadastrar {payload['name']} ({payload['ipv4']}:{payload['ssh_port']}) como {role}?\n\n"
@@ -454,6 +475,7 @@ def request_node_onboarding(host):
         "15", "88",
     ])
     if code != 0:
+        password = ""
         payload.clear()
         return
     try:
@@ -462,6 +484,7 @@ def request_node_onboarding(host):
             json.dumps(payload), timeout=2100,
         )
     finally:
+        password = ""
         payload.clear()
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import importlib.util
+import ipaddress
 import json
 import os
 import shutil
@@ -406,6 +407,56 @@ def node_add(db: Database) -> None:
     )
 
 
+def node_add_edge_minimal(db: Database) -> None:
+    """Cadastra uma edge nova com somente os dados indispensáveis de SSH."""
+    ipv4 = ask("IPv4 público da nova edge")
+    if ipv4 is None:
+        return
+    try:
+        address = ipaddress.ip_address(ipv4.strip())
+        if address.version != 4 or not address.is_global:
+            raise ValueError
+    except ValueError:
+        message("Informe um IPv4 público global. Hostname, IPv6 e IP privado não são aceitos.")
+        return
+    name = "edge-" + str(address).replace(".", "-")
+    port_raw = ask("Porta SSH", "22")
+    if port_raw is None:
+        return
+    initial_user = ask("Usuário SSH inicial", "root")
+    if initial_user is None:
+        return
+    if not confirm(
+        f"Cadastrar {name} ({address}:{port_raw}) como Edge?\n\n"
+        "O nome e o papel serão definidos automaticamente. O control plane "
+        "capturará a host key, criará a chave gerenciada e instalará somente "
+        "a release aprovada. A edge só entrará no DNS depois de ficar ready."
+    ):
+        return
+    password = ask("Senha inicial (não será armazenada)", password=True)
+    if password is None:
+        return
+    try:
+        result = onboard_node(
+            db, name=name, ipv4=str(address), ssh_port=int(port_raw),
+            initial_user=initial_user, password=password, role="edge",
+            operator="control-plane-menu",
+            control_plane=resolve_control_plane_host(require_explicit=True),
+        )
+    finally:
+        password = ""
+        del password
+        gc.collect()
+    deployment = result.get("deployment_id") or "aguardando tenants habilitados"
+    message(
+        f"Edge {result['node_id']} cadastrada.\n"
+        f"Nome: {name}\nEstado: {result['state']}\n"
+        f"Pacote: {result['package_ref']}\nDeployment: {deployment}\n\n"
+        "Senha descartada; host key e chave gerenciada foram fixadas. "
+        "A promoção para ready depende dos gates automáticos."
+    )
+
+
 def edge_action(db: Database, state: str) -> None:
     edges = db.edges()
     selected = choose("Selecionar edge", [(x["id"], f"{x['name']} — {x['state']}") for x in edges])
@@ -460,21 +511,23 @@ def edges_menu(db: Database) -> None:
     while True:
         action = choose("Edges — distribuição e entrega", [
             ("1", "Consultar edges, estados e versões"),
-            ("2", "Cadastrar nova máquina como Edge ou Load Balancer"),
-            ("3", "Renomear edge (preserva o ID técnico)"),
-            ("4", "Iniciar drenagem de uma edge"),
-            ("5", "Marcar edge como pronta"),
-            ("6", "Desabilitar uma edge"),
+            ("2", "Adicionar nova Edge (cadastro mínimo: IP/SSH)"),
+            ("3", "Cadastrar Edge ou Load Balancer (avançado)"),
+            ("4", "Renomear edge (preserva o ID técnico)"),
+            ("5", "Iniciar drenagem de uma edge"),
+            ("6", "Marcar edge como pronta"),
+            ("7", "Desabilitar uma edge"),
             ("0", "Voltar"),
         ])
         try:
             if action in (None, "0"): return
             if action == "1": edge_list(db)
-            elif action == "2": node_add(db)
-            elif action == "3": edge_rename(db)
-            elif action == "4": edge_action(db, "draining")
-            elif action == "5": edge_action(db, "ready")
-            elif action == "6": edge_action(db, "disabled")
+            elif action == "2": node_add_edge_minimal(db)
+            elif action == "3": node_add(db)
+            elif action == "4": edge_rename(db)
+            elif action == "5": edge_action(db, "draining")
+            elif action == "6": edge_action(db, "ready")
+            elif action == "7": edge_action(db, "disabled")
         except Exception as exc: message("Falha na operação de edge:\n\n" + str(exc))
 
 
