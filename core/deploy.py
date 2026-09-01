@@ -273,6 +273,7 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         raise ValueError("nenhum tenant habilitado para ativação da edge")
     contexts = tenant_deployment_contexts(tenants)
     alias = _external_alias_context(db, contexts)
+    control_plane_host = resolve_control_plane_host()
     command = ["ansible-playbook", "-i", str(inventory), str(playbook),
                "--extra-vars", json.dumps({
                    "release_id": deployment["release_id"],
@@ -288,6 +289,7 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
                    "tenant_ids": [item["tenant_id"] for item in contexts],
                    "vod_tenant_ids": [item["tenant_id"] for item in contexts if item["vod"]],
                    "tenant_health_hosts": [{"host": item["health_host"]} for item in contexts],
+                   "cdnmnus_control_plane_host": control_plane_host,
                })]
     onboarding_edges = [
         edge for edge in db.edges()
