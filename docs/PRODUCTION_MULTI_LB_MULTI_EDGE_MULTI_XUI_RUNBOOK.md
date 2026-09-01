@@ -49,7 +49,8 @@ Quando documentos históricos divergirem, use esta ordem:
 
 **Atualização de identidade em 29/08/2026:** os IDs técnicos autoritativos são
 `1` para `.111`, `2` para `.168` e `3` para `.170`; o próximo cadastro recebe
-`4` automaticamente. `lb011`/`lb02` sobrevivem apenas como aliases Ansible/SSH
+`4` automaticamente. Os nomes operacionais das edges são `edge1`/`edge2`;
+os Load Balancers são `.111`/`.237`.
 de compatibilidade. O nó `1` está registrado `load_balancer/candidate`, sem
 promoção ou ativação.
 
@@ -186,7 +187,7 @@ Preflight limitado:
 
 ```bash
 ansible-playbook -i ansible/inventories/production/hosts.yml \
-  ansible/playbooks/preflight-edge.yml --limit lb011
+  ansible/playbooks/preflight-edge.yml --limit edge1
 ```
 
 Aceite:

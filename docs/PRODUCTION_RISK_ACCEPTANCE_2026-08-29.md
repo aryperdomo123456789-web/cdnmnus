@@ -1,8 +1,8 @@
 # Registro de continuidade sem GPG e sem snapshot — 2026-08-29
 
-> Atualização posterior: os IDs `lb011` e `lb02` citados abaixo são evidência
-> histórica. Desde a migração numérica de 29/08/2026, correspondem aos IDs
-> técnicos `2` (`.168`) e `3` (`.170`). O alias Ansible foi preservado.
+> Atualização posterior: os nomes históricos `lb011` e `lb02` correspondem às
+> edges operacionais `edge1` (`.168`) e `edge2` (`.170`). Os IDs técnicos são
+> `2` e `3`; os Load Balancers são `.111` e `.237`.
 
 ## Decisão do operador
 
@@ -59,7 +59,7 @@ etapa.
 
 ## Preflight somente leitura das edges
 
-### `.168` / ID técnico `lb011`
+### `.168` / edge operacional `edge1` / ID técnico `2`
 
 - fingerprint conhecida e `StrictHostKeyChecking=yes`;
 - chave SSH local modo `0600`;
@@ -70,7 +70,7 @@ etapa.
 - `current.json` ainda ausente;
 - banco do control plane ainda registra estado `bootstrapping`.
 
-### `.170` / ID técnico `lb02`
+### `.170` / edge operacional `edge2` / ID técnico `3`
 
 - fingerprint conhecida e `StrictHostKeyChecking=yes`;
 - chave SSH local modo `0600`;

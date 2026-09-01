@@ -1,8 +1,9 @@
 # Transição auditada e rollback explícito do canário
 
-O ID técnico atual da `.168` é `2`. O parâmetro `--limit lb011` abaixo usa
-somente o alias Ansible de compatibilidade e não representa mais o ID do nó.
-Estes controles não alteram DNS. Execute sempre com `--limit lb011`, depois de
+O ID técnico atual da `.168` é `2`. O nome operacional é `edge1`; o parâmetro
+`--limit edge1` usa o alias Ansible atual e não representa o ID do nó. A `.170`
+é `edge2`. Os Load Balancers são `.111` e `.237`.
+Estes controles não alteram DNS. Execute sempre com `--limit edge1`, depois de
 confirmar que `.168` está drenada e que `.111/.170` suportam o tráfego.
 
 ## Estado `bootstrapping` para `ready`
@@ -16,7 +17,7 @@ Exemplo local (não executar antes dos gates de preflight, mídia e rollback):
 
 ```python
 db.set_edge_state(
-    "lb011", "ready",
+    "2", "ready",
     operator="operador-identificado",
     reason="preflight, hashes e health aprovados",
     payload={"release_id": "RELEASE_APROVADA", "change_id": "CHG-..."},
@@ -33,8 +34,8 @@ obsoleto. A release de destino deve estar sincronizada e passar pelo verificador
 ANSIBLE_CONFIG=/opt/cdnmnus/ansible/ansible.cfg \
 /opt/cdnmnus/venv/bin/ansible-playbook \
   -i ansible/inventories/production/hosts.yml \
-  ansible/playbooks/rollback-edge.yml --limit lb011 \
-  --extra-vars @/caminho/0600/rollback-lb011.json
+  ansible/playbooks/rollback-edge.yml --limit edge1 \
+  --extra-vars @/caminho/0600/rollback-edge1.json
 ```
 
 O JSON `0600` contém `expected_current_release_id`, `release_id` (destino),
