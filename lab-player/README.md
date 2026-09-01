@@ -36,3 +36,21 @@ python3 scripts/test_playback_flow.py --cname
 O ensaio verifica resolução do alias, handshake Xtream, amostras live e VOD,
 `HTTP 200`, `HTTP 206`, `Range`, conteúdo não vazio e grava um relatório sem
 senha. Use conta de laboratório com limite, nunca credenciais administrativas.
+
+## XUI de laboratório com credencial local
+
+Para usar um XUI de teste sem colocar usuário, senha ou M3U no repositório,
+grave os valores somente em um arquivo root-only, por exemplo
+`/etc/cdnmnus/lab-player/xuilab.env`, com modo `0600`:
+
+```bash
+PLAYER_USERNAME='...'
+PLAYER_PASSWORD='...'
+PLAYER_BASE_DIRECT='http://xui-de-lab'
+PLAYER_BASE_CNAME='https://xuilab.example'
+```
+
+Execute `scripts/run_xuilab_test.sh`. O sincronizador monta a URL `get.php`
+apenas em memória, baixa a playlist no diretório local ignorado e redige as
+credenciais em relatórios. Esse arquivo não é cadastro de produção, não é
+sincronizado entre edges e não deve ser adicionado ao SQLite ou ao Git.

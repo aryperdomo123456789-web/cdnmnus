@@ -5,6 +5,19 @@ umask 077
 LAB_DIR="${LAB_DIR:-/opt/cdnmnus/lab-player}"
 DATE="$(date +%Y%m%d_%H%M%S)"
 
+# Credential loading is opt-in and restricted to a root-only file.
+PLAYER_CREDENTIALS_FILE="${PLAYER_CREDENTIALS_FILE:-}"
+if [[ -n "${PLAYER_CREDENTIALS_FILE}" ]]; then
+  [[ -f "${PLAYER_CREDENTIALS_FILE}" ]] || { echo "Arquivo de credenciais ausente." >&2; exit 1; }
+  [[ "$(stat -c '%u' "${PLAYER_CREDENTIALS_FILE}")" == "0" &&
+     "$(stat -c '%a' "${PLAYER_CREDENTIALS_FILE}")" == "600" ]] || {
+    echo "Arquivo de credenciais deve pertencer a root e ter modo 0600." >&2
+    exit 1
+  }
+  # shellcheck disable=SC1090
+  source "${PLAYER_CREDENTIALS_FILE}"
+fi
+
 CDN_URL="${CDN_URL:-}"
 DIRECT_URL="${DIRECT_URL:-}"
 PLAYER_USERNAME="${PLAYER_USERNAME:-}"
