@@ -26,6 +26,7 @@ PLAYER_BASE_CDN="${PLAYER_BASE_CDN:-}"
 PLAYER_BASE_DIRECT="${PLAYER_BASE_DIRECT:-}"
 PLAYER_BASE_CNAME="${PLAYER_BASE_CNAME:-}"
 PLAYER_BASE_CNAME_ALIASES="${PLAYER_BASE_CNAME_ALIASES:-}"
+PLAYER_SKIP_CNAME="${PLAYER_SKIP_CNAME:-0}"
 USER_AGENT="${USER_AGENT:-XCIPTV / Android 12 / OkHttp/4.9.3}"
 
 if [[ -z "${CDN_URL}" && -n "${PLAYER_BASE_CDN}" && -n "${PLAYER_USERNAME}" && -n "${PLAYER_PASSWORD}" ]]; then
@@ -34,7 +35,7 @@ fi
 if [[ -z "${DIRECT_URL}" && -n "${PLAYER_BASE_DIRECT}" && -n "${PLAYER_USERNAME}" && -n "${PLAYER_PASSWORD}" ]]; then
   DIRECT_URL="${PLAYER_BASE_DIRECT%/}/get.php?username=${PLAYER_USERNAME}&password=${PLAYER_PASSWORD}&type=m3u_plus&output=hls"
 fi
-if [[ -n "${PLAYER_BASE_CNAME}" && -n "${PLAYER_USERNAME}" && -n "${PLAYER_PASSWORD}" ]]; then
+if [[ "${PLAYER_SKIP_CNAME}" != "1" && -n "${PLAYER_BASE_CNAME}" && -n "${PLAYER_USERNAME}" && -n "${PLAYER_PASSWORD}" ]]; then
   CNAME_URL="${PLAYER_BASE_CNAME%/}/get.php?username=${PLAYER_USERNAME}&password=${PLAYER_PASSWORD}&type=m3u_plus&output=hls"
 fi
 
