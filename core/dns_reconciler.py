@@ -69,8 +69,9 @@ class DNSReconciler:
 
 
 def reconcile_cluster_dns(db: Database, *, operator: str = "control-plane",
-                          canonical: str = "cdn.phpd77.com") -> dict[str, list[dict[str, str]]]:
+                          canonical: str | None = None) -> dict[str, list[dict[str, str]]]:
     """Publica somente edges ready e todos os aliases cadastrados."""
+    canonical = canonical or db.setting("managed_canonical_host", "cdn.phpd77.com")
     provider = CloudflareDNS()
     reconciler = DNSReconciler(provider, protected_target=canonical, db=db, operator=operator)
     edges = [item for item in db.edges() if item["state"] == "ready"]

@@ -618,6 +618,11 @@ def cloudflare_configure() -> None:
         token_path.chmod(0o600)
         zones_path.write_text(zones.strip() + "\n", encoding="utf-8")
         zones_path.chmod(0o644)
+        acme_directory = Path("/etc/cdnmnus/secrets")
+        acme_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        acme_path = acme_directory / "cloudflare_acme.ini"
+        acme_path.write_text(f"dns_cloudflare_api_token = {token.strip()}\n", encoding="utf-8")
+        acme_path.chmod(0o600)
         token = ""
         message("Cloudflare configurada e token validado.\n\n" +
                 "Zonas autorizadas: " + ", ".join(provider.zones) +
@@ -629,12 +634,72 @@ def cloudflare_configure() -> None:
         gc.collect()
 
 
+def cloudflare_domain_switch(db: Database) -> None:
+    """Migra a zona/domínio de forma aditiva, sem remover o domínio atual."""
+    domain = ask("Novo domínio raiz (ex.: dominionovo.com)")
+    if domain is None or not domain.strip():
+        return
+    domain = domain.strip().lower().rstrip(".")
+    zones = ask("Zonas Cloudflare autorizadas", domain)
+    if zones is None or not zones.strip():
+        return
+    token = ask("Novo token Cloudflare (não será exibido nem vai ao banco)", password=True)
+    if token is None or not token.strip():
+        return
+    try:
+        provider = CloudflareDNS(token=token.strip(), zone=zones.strip())
+        provider.verify()
+        provider.zone_for_name(f"cdn.{domain}")
+        tenants = db.tenants(enabled_only=True)
+        preview = [f"cdn.{domain}"] + [
+            f"{item['canonical_host'].split('.', 1)[0]}.{domain} ({item['id']})"
+            for item in tenants
+        ]
+        if not confirm(
+            "Migrar a identidade pública para a nova zona?\n\n" +
+            "Hosts derivados que serão preparados:\n" + "\n".join(preview) +
+            "\n\nO domínio antigo será preservado como alias.\n"
+            "Nenhum DNS antigo será apagado nesta operação."
+        ):
+            return
+        directory = Path("/etc/cdnmnus/cloudflare")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (directory / "api-token").write_text(token.strip() + "\n", encoding="utf-8")
+        (directory / "api-token").chmod(0o600)
+        (directory / "zones").write_text(zones.strip() + "\n", encoding="utf-8")
+        (directory / "zones").chmod(0o644)
+        acme_directory = Path("/etc/cdnmnus/secrets")
+        acme_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        acme_path = acme_directory / "cloudflare_acme.ini"
+        acme_path.write_text(f"dns_cloudflare_api_token = {token.strip()}\n", encoding="utf-8")
+        acme_path.chmod(0o600)
+        result = db.switch_managed_domain(domain)
+        for item in tenants:
+            db.enqueue_tls_job(item["id"])
+        dns = reconcile_cluster_dns(db, operator="mago-cdn-domain-switch", canonical=result["canonical"])
+        message(
+            "MIGRAÇÃO PREPARADA COM SUCESSO\n\n" +
+            f"Cloudflare: {', '.join(provider.zones)}\n" +
+            f"Pool novo: {result['canonical']}\n" +
+            "\n".join(f"{x['tenant_id']}: {x['new']}" for x in result["mappings"]) +
+            f"\n\nDNS aplicados: {len(dns['pool']) + len(dns['aliases'])}\n"
+            "TLS: jobs reenfileirados por tenant.\n"
+            "Próximo passo obrigatório: executar ACME, compilar release, validar e promover as edges."
+        )
+    except (CloudflareError, ValueError) as exc:
+        message("Migração cancelada; nenhuma release foi publicada.\n\n" + str(exc))
+    finally:
+        token = ""
+        gc.collect()
+
+
 def dns_menu(db: Database) -> None:
     while True:
         action = choose("DNS e Cloudflare", [
             ("1", "Ver matriz DNS local"),
             ("2", "Reconciliar Cloudflare agora"),
             ("3", "Configurar conta/token Cloudflare"),
+            ("4", "Trocar Cloudflare e domínio com migração segura"),
             ("0", "Voltar"),
         ])
         if action in (None, "0"): return
@@ -648,6 +713,8 @@ def dns_menu(db: Database) -> None:
                     cloudflare_reconcile(db)
             elif action == "3":
                 cloudflare_configure()
+            elif action == "4":
+                cloudflare_domain_switch(db)
         except (CloudflareError, ValueError) as exc:
             message("Falha na reconciliação Cloudflare:\n\n" + str(exc))
 

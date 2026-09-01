@@ -583,6 +583,62 @@ class Database:
                        (hostname, tenant_id))
         return self.tenant(tenant_id)
 
+    def switch_managed_domain(self, domain: str) -> dict[str, Any]:
+        """Adiciona os canonicals no novo domínio sem apagar os antigos.
+
+        O alias anterior permanece publicado durante a janela de migração. A
+        troca de tráfego só ocorre depois de uma release renderizada e dos
+        gates TLS/health, evitando uma quebra por mudança apenas no banco.
+        """
+        domain = normalize_hostname(domain)
+        old_domain = self.setting("managed_domain")
+        with self.transaction(immediate=True) as db:
+            tenants = db.execute("SELECT * FROM xui_tenants WHERE enabled=1 ORDER BY id").fetchall()
+            mappings: list[dict[str, str]] = []
+            used: set[str] = set()
+            for tenant in tenants:
+                old_canonical = normalize_hostname(str(tenant["canonical_host"]))
+                label = old_canonical.split(".", 1)[0]
+                new_canonical = normalize_hostname(f"{label}.{domain}")
+                if new_canonical in used:
+                    raise ValueError(f"hostname derivado duplicado: {new_canonical}")
+                collision = db.execute(
+                    "SELECT tenant_id FROM tenant_hosts WHERE hostname=? AND tenant_id<>?",
+                    (new_canonical, tenant["id"]),
+                ).fetchone()
+                if collision:
+                    raise ValueError(f"hostname já pertence a outro tenant: {new_canonical}")
+                used.add(new_canonical)
+                existing = db.execute(
+                    "SELECT 1 FROM tenant_hosts WHERE hostname=? AND tenant_id=?",
+                    (new_canonical, tenant["id"]),
+                ).fetchone()
+                if not existing:
+                    db.execute(
+                        "INSERT INTO tenant_hosts(hostname,tenant_id,is_canonical,tls_status) VALUES(?,?,1,'pending')",
+                        (new_canonical, tenant["id"]),
+                    )
+                db.execute(
+                    "UPDATE tenant_hosts SET is_canonical=CASE WHEN hostname=? THEN 1 ELSE 0 END WHERE tenant_id=?",
+                    (new_canonical, tenant["id"]),
+                )
+                db.execute(
+                    "UPDATE xui_tenants SET canonical_host=?,health_host=CASE WHEN health_host IS NULL OR health_host=? THEN ? ELSE health_host END,playlist_host=CASE WHEN playlist_host IS NULL OR playlist_host=? THEN ? ELSE playlist_host END,config_version=config_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (new_canonical, old_canonical, new_canonical, old_canonical, new_canonical, tenant["id"]),
+                )
+                mappings.append({"tenant_id": tenant["id"], "old": old_canonical, "new": new_canonical})
+            canonical = f"cdn.{domain}"
+            self._set_setting_in_connection(db, "managed_domain", domain)
+            self._set_setting_in_connection(db, "managed_canonical_host", canonical)
+        return {"old_domain": old_domain or "", "domain": domain,
+                "canonical": canonical, "mappings": mappings}
+
+    @staticmethod
+    def _set_setting_in_connection(db: sqlite3.Connection, key: str, value: Any) -> None:
+        db.execute("""INSERT INTO settings(key,value) VALUES(?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP""",
+                   (key, json.dumps(value, ensure_ascii=False)))
+
     def add_upstream(self, tenant_id: str, kind: str, host: str, port: int = 80) -> dict[str, Any]:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         if kind not in {"lb", "vod"}:
