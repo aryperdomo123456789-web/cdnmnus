@@ -587,7 +587,7 @@ class Database:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         if kind not in {"lb", "vod"}:
             raise ValueError("tipo de upstream inválido")
-        host = normalize_hostname(host)
+        host = normalize_origin_host(host)
         port = normalize_port(port)
         upstream_id = f"{kind}-{tenant_id}-{uuid.uuid4().hex[:10]}"
         with self.transaction(immediate=True) as db:
@@ -599,7 +599,7 @@ class Database:
         return next(item for item in self.tenant(tenant_id)["upstreams"] if item["id"] == upstream_id)
 
     def update_upstream(self, upstream_id: str, host: str, port: int = 80) -> dict[str, Any]:
-        host = normalize_hostname(host); port = normalize_port(port)
+        host = normalize_origin_host(host); port = normalize_port(port)
         with self.transaction(immediate=True) as db:
             row = db.execute("SELECT tenant_id,kind FROM tenant_upstreams WHERE id=?", (upstream_id,)).fetchone()
             if row is None or row["kind"] not in {"lb", "vod"}:

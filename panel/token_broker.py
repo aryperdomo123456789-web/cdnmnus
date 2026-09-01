@@ -126,48 +126,62 @@ def validate_configured_host(host: str) -> None:
 
 
 def query_origin(uri: str, config: dict[str, object]) -> str:
-    origin = str(config["origin_host"])
+    origin = str(config["origin_host"]).lower()
     public_host = str(config["public_host"])
-    # Conecta ao mesmo IP que foi validado. Resolver novamente dentro de
-    # HTTPConnection abriria uma janela de DNS rebinding/TOCTOU.
-    address = validated_addresses(origin)[0]
-    connection = http.client.HTTPConnection(address, 80, timeout=5)
-    try:
-        connection.request("GET", uri, headers={
-            "Host": public_host,
-            "User-Agent": "cdnmnus-token-broker/1.0",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-        })
-        response = connection.getresponse()
-        location = response.getheader("Location", "")
-        response.read(4096)
-    finally:
-        connection.close()
-    if response.status not in (HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT):
-        raise LookupError(f"upstream_status_{response.status}")
-    if not location or len(location) > MAX_LOCATION:
-        raise ValueError("redirect ausente ou excessivo")
-    parsed = urlsplit(location)
-    if parsed.username or parsed.password or parsed.fragment or parsed.scheme not in ("", "http"):
-        raise ValueError("redirect inválido")
-    target_host = (parsed.hostname or origin).lower()
-    target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    if target_port != 80:
-        raise ValueError("porta de redirect não autorizada")
-    path = parsed.path or "/"
-    if not path.startswith("/") or ".." in path.split("/"):
-        raise ValueError("caminho de redirect inválido")
-    if parsed.query:
-        path += "?" + parsed.query
     load_balancers = [str(x).lower() for x in config.get("load_balancers", [])]
-    if target_host in load_balancers:
-        validated_addresses(target_host)
-        index = load_balancers.index(target_host)
-        return f"/__cdnmnus_resolved_lb_{index}{path}"
-    if target_host == origin.lower() or target_host == public_host.lower():
-        return "/__cdnmnus_resolved_origin" + path
-    raise PermissionError("redirect fora da allowlist")
+    allowed_hosts = {origin, public_host.lower(), *load_balancers}
+    host, path = origin, uri
+    redirect_statuses = (HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND,
+                         HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT)
+    for hop in range(5):
+        # Every hop is pinned after DNS validation. A redirect can never add a
+        # new destination; it must already belong to this tenant's allowlist.
+        if host not in allowed_hosts:
+            raise PermissionError("redirect fora da allowlist")
+        address = validated_addresses(host)[0]
+        connection = http.client.HTTPConnection(address, 80, timeout=5)
+        try:
+            connection.request("GET", path, headers={
+                "Host": public_host if hop == 0 else host,
+                "User-Agent": "cdnmnus-token-broker/1.0",
+                "Accept-Encoding": "identity",
+                "Connection": "close",
+            })
+            response = connection.getresponse()
+            location = response.getheader("Location", "")
+            response.read(4096)
+        finally:
+            connection.close()
+        if response.status not in redirect_statuses:
+            if response.status not in (HTTPStatus.OK, HTTPStatus.PARTIAL_CONTENT):
+                raise LookupError(f"upstream_status_{response.status}")
+            if host in load_balancers:
+                return f"/__cdnmnus_resolved_lb_{load_balancers.index(host)}{path}"
+            if host == origin or host == public_host.lower():
+                return "/__cdnmnus_resolved_origin" + path
+            raise PermissionError("destino final fora da allowlist")
+        if not location or len(location) > MAX_LOCATION:
+            raise ValueError("redirect ausente ou excessivo")
+        parsed = urlsplit(location)
+        if parsed.username or parsed.password or parsed.fragment or parsed.scheme not in ("", "http"):
+            raise ValueError("redirect inválido")
+        target_host = (parsed.hostname or host).lower()
+        target_port = parsed.port or 80
+        if target_port != 80:
+            raise ValueError("porta de redirect não autorizada")
+        next_path = parsed.path or "/"
+        if not next_path.startswith("/") or ".." in next_path.split("/"):
+            raise ValueError("caminho de redirect inválido")
+        if parsed.query:
+            next_path += "?" + parsed.query
+        if target_host not in allowed_hosts:
+            raise PermissionError("redirect fora da allowlist")
+        # Preserve the legacy contract for providers that repeat the same LB
+        # redirect: the internal LB route is already the safe terminal hop.
+        if target_host == host and target_host in load_balancers:
+            return f"/__cdnmnus_resolved_lb_{load_balancers.index(target_host)}{next_path}"
+        host, path = target_host, next_path
+    raise LookupError("excesso de redirects")
 
 
 def query_vod(uri: str, config: dict[str, object]) -> str:

@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from core.db import normalize_hostname, normalize_id, normalize_port
+from core.db import normalize_hostname, normalize_id, normalize_origin_host, normalize_port
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ def _normalized(tenant: dict[str, Any]) -> dict[str, Any]:
     grouped = {kind: [] for kind in ("lb", "vod")}
     for item in upstreams:
         if item["kind"] in grouped:
-            grouped[item["kind"]].append({"host": normalize_hostname(str(item["host"])), "port": normalize_port(item["port"])})
+            grouped[item["kind"]].append({"host": normalize_origin_host(str(item["host"])), "port": normalize_port(item["port"])})
     return {"id": tenant_id, "hosts": aliases, "health_host": health_host, "playlist_host": playlist_host,
             "origin": {"host": normalize_hostname(str(origin[0]["host"])), "port": normalize_port(origin[0]["port"])},
             "lb": sorted(grouped["lb"], key=lambda x: (x["host"], x["port"])),
@@ -143,6 +143,23 @@ server {{
         sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
         sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
     }}
+    location = /player_api.php {{
+        proxy_pass http://origin_{tid};
+        proxy_set_header Host {server_names.split()[0]};
+        proxy_set_header Accept-Encoding "";
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Set-Cookie;
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        sub_filter_types application/json text/plain *;
+        sub_filter_once off;
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
+    }}
     location ~ ^/(?:hls|live)/ {{
         proxy_pass http://broker_{tid};
         proxy_set_header X-CDN-Tenant {tid};
@@ -206,6 +223,26 @@ server {{
         sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
         sub_filter 'http://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
         sub_filter 'https://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
+    }}
+    location = /player_api.php {{
+        proxy_pass http://origin_{tid};
+        proxy_set_header Host {server_names.split()[0]};
+        proxy_set_header Accept-Encoding "";
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Set-Cookie;
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        sub_filter_types application/json text/plain *;
+        sub_filter_once off;
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
     }}
 
     location ~ ^/(?:hls|live)/ {{

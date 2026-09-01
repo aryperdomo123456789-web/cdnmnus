@@ -7,6 +7,18 @@ DATE="$(date +%Y%m%d_%H%M%S)"
 
 # Credential loading is opt-in and restricted to a root-only file.
 PLAYER_CREDENTIALS_FILE="${PLAYER_CREDENTIALS_FILE:-}"
+_player_username_set="${PLAYER_USERNAME+x}"
+_player_username_value="${PLAYER_USERNAME-}"
+_player_password_set="${PLAYER_PASSWORD+x}"
+_player_password_value="${PLAYER_PASSWORD-}"
+_player_base_cdn_set="${PLAYER_BASE_CDN+x}"
+_player_base_cdn_value="${PLAYER_BASE_CDN-}"
+_player_base_direct_set="${PLAYER_BASE_DIRECT+x}"
+_player_base_direct_value="${PLAYER_BASE_DIRECT-}"
+_player_base_cname_set="${PLAYER_BASE_CNAME+x}"
+_player_base_cname_value="${PLAYER_BASE_CNAME-}"
+_player_skip_cname_set="${PLAYER_SKIP_CNAME+x}"
+_player_skip_cname_value="${PLAYER_SKIP_CNAME-}"
 if [[ -n "${PLAYER_CREDENTIALS_FILE}" ]]; then
   [[ -f "${PLAYER_CREDENTIALS_FILE}" ]] || { echo "Arquivo de credenciais ausente." >&2; exit 1; }
   [[ "$(stat -c '%u' "${PLAYER_CREDENTIALS_FILE}")" == "0" &&
@@ -17,6 +29,13 @@ if [[ -n "${PLAYER_CREDENTIALS_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${PLAYER_CREDENTIALS_FILE}"
 fi
+# Explicit process environment always wins over the local credential file.
+[[ "${_player_username_set}" == x ]] && PLAYER_USERNAME="${_player_username_value}"
+[[ "${_player_password_set}" == x ]] && PLAYER_PASSWORD="${_player_password_value}"
+[[ "${_player_base_cdn_set}" == x ]] && PLAYER_BASE_CDN="${_player_base_cdn_value}"
+[[ "${_player_base_direct_set}" == x ]] && PLAYER_BASE_DIRECT="${_player_base_direct_value}"
+[[ "${_player_base_cname_set}" == x ]] && PLAYER_BASE_CNAME="${_player_base_cname_value}"
+[[ "${_player_skip_cname_set}" == x ]] && PLAYER_SKIP_CNAME="${_player_skip_cname_value}"
 
 CDN_URL="${CDN_URL:-}"
 DIRECT_URL="${DIRECT_URL:-}"

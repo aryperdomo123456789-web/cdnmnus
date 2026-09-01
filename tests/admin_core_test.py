@@ -43,6 +43,8 @@ with tempfile.TemporaryDirectory() as root:
     assert "location ^~ /__cdnmnus_xui1_origin/" in output.content and "internal;" in output.content
     assert "location ^~ /__cdnmnus_xui1_lb_0/" in output.content
     assert "location = /get.php" in output.content
+    assert "location = /player_api.php" in output.content
+    assert "sub_filter 'origin1.test' 'xui1.cdn.test';" in output.content
     assert "sub_filter 'http://origin1.test:80' 'http://xui1.cdn.test';" in output.content
     assert output.content == render_tenant(db.tenant("xui1")).content
 

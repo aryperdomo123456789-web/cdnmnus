@@ -121,6 +121,32 @@ try:
     cfg = {"origin_host": "origin.test", "public_host": "cdn.test", "load_balancers": ["lb.test"], "ttl_seconds": 2}
     assert real_query("/hls/20_2.ts", cfg) == "/__cdnmnus_resolved_lb_0/token/new.ts"
     assert FakeConnection.connected_to == "127.0.0.1"
+
+    # Redirects reais podem passar por mais de um LB antes do conteúdo. O
+    # broker deve seguir a cadeia somente entre destinos já autorizados.
+    chain_responses = [(302, "http://lb2.test/token/next.ts"), (200, "")]
+    chain_hosts = []
+
+    class ChainResponse(FakeResponse):
+        def __init__(self):
+            self.status, self.location = chain_responses.pop(0)
+
+        def getheader(self, name, default=""):
+            return self.location if name == "Location" else default
+
+    class ChainConnection(FakeConnection):
+        def __init__(self, host, *args, **kwargs):
+            chain_hosts.append(host)
+
+        def getresponse(self):
+            return ChainResponse()
+
+    mod.http.client.HTTPConnection = ChainConnection
+    mod.validated_addresses = lambda host: ["127.0.0.1"]
+    chain_cfg = {**cfg, "load_balancers": ["lb.test", "lb2.test"]}
+    assert real_query("/hls/21_2.ts", chain_cfg) == "/__cdnmnus_resolved_lb_1/token/next.ts"
+    assert chain_hosts == ["127.0.0.1", "127.0.0.1"]
+    mod.http.client.HTTPConnection = FakeConnection
     location = "http://169.254.169.254/latest/meta-data/"
     try:
         real_query("/hls/20_2.ts", cfg)
