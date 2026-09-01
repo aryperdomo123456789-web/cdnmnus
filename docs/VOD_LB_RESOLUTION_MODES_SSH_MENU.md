@@ -80,6 +80,27 @@ Não implementar descoberta simplesmente removendo `vod_hosts` ou aceitando
 qualquer `Location`. Isso eliminaria o fail-closed e transformaria a edge em
 um proxy SSRF.
 
+### 2.4 Divergências que o implementador deve conhecer
+
+Estas divergências são intencionais no estado atual e não devem ser tratadas
+como se já estivessem resolvidas:
+
+- o menu já administra fontes manuais por `kind=vod` e `kind=lb`, mas ainda não
+  possui a tela de política `strict`/`controlled_discovery`;
+- o relay VOD já entende seeds HTTP/HTTPS e pinning, mas o caminho legado
+  `query_vod()` de [panel/token_broker.py](../panel/token_broker.py) usa
+  `HTTPConnection`/porta 80 e precisa ser atualizado ou retirado do caminho de
+  VOD antes de compartilhar o novo contrato;
+- o snapshot atual usa `schema_version` 1/2 e não contém `mode`, TTL ou tabela
+  de destinos aprendidos;
+- `external_alias_tenant_id` seleciona um único tenant para o fallback externo;
+  múltiplos XUIs devem usar hosts públicos registrados individualmente e nunca
+  depender de seleção pelo índice da lista;
+- o health operacional precisou ser endurecido para validar SAN/SNI real; não
+  considerar `validate_certs: false` como prova de produção;
+- a descoberta controlada não deve ser habilitada por migração automática. A
+  migração inicial de todos os tenants deve criar política `strict`.
+
 ## 3. Contrato dos dois modos
 
 ### 3.1 Modo estrito
@@ -428,6 +449,89 @@ Se a política estiver ausente, inválida, expirada ou inconsistente:
 - rota desconhecida deve continuar `421`;
 - endpoint administrativo deve continuar `421` ou exigir a proteção existente;
 - não usar `-k`, não desligar validação TLS e não remover `internal`.
+
+### 7.4 Mapa de implementação arquivo-a-arquivo
+
+Execute nesta ordem. Cada etapa deve terminar com testes antes de iniciar a
+seguinte.
+
+| Ordem | Arquivo | Mudança obrigatória |
+| --- | --- | --- |
+| 1 | `core/db.py` | migration transacional, CRUD de política, destinos aprendidos, TTL e eventos sanitizados |
+| 2 | `core/render_tenants.py` | incluir política e destinos ativos no snapshot imutável; default compatível `strict` |
+| 3 | `core/deploy.py` | carregar política por tenant, incluir digest/snapshot e impedir alias ambíguo |
+| 4 | `panel/policy.py` novo | parser, normalização, DNS público, ports, TTL, reason codes e função comum de autorização |
+| 5 | `panel/vod_relay.py` | consultar a política comum antes de cada conexão e aprender somente após redirect válido |
+| 6 | `panel/token_broker.py` | usar a mesma política para LB/manifesto; corrigir o caminho legado HTTP-only ou removê-lo do VOD |
+| 7 | `panel/multi_tenant_broker.py` | passar `tenant_id`, tipo da rota e snapshot à política; rejeitar headers internos enviados pelo cliente |
+| 8 | `cli/mago_cdn.py` | menu autoritativo de política, confirmação forte e operações de aprovação/bloqueio/expiração |
+| 9 | `ansible/roles/node_menu/files/node_menu.py` | somente delegar a nova opção ao control plane; não criar banco no edge |
+| 10 | `web/app.py` | opcionalmente expor a mesma operação administrativa, com a mesma autorização e sem duplicar regra |
+| 11 | `ansible/roles/cdn_tenants/tasks/main.yml` | publicar snapshot/units, manter socket fixo e `421`/fail-closed |
+| 12 | `tests/` | cobrir migração, política, relay, broker, menu, isolamento, headers e rollback |
+
+Não alterar `core/render_tenants.py` para inserir `proxy_pass` com hostname
+observado. O Nginx deve continuar apontando para o socket fixo do tenant; a
+resolução de destino pertence ao processo Python protegido.
+
+### 7.5 Pseudocódigo obrigatório
+
+O comportamento mínimo deve ser equivalente a:
+
+```python
+def resolve_target(tenant_id, route_kind, current_url, hop, snapshot):
+    policy = snapshot.policy_for(tenant_id)
+    target = parse_redirect_without_userinfo(current_url)
+    require(target.scheme in {"http", "https"})
+    require(target.port in policy.allowed_ports)
+    require(target.path.startswith("/"))
+    reject_if_private_or_non_global_dns(target.hostname)
+
+    if hop == 0:
+        require(target == snapshot.tenant(tenant_id).origin)
+    elif policy.mode == "strict":
+        require(policy.manual_seed(route_kind, target))
+    else:
+        learned = policy.active_discovery(route_kind, target)
+        if not learned:
+            candidate = validate_public_target(target)
+            require(candidate.allowed_by_provider_boundary or policy.approval_required)
+            if policy.approval_required:
+                record_candidate_without_connecting(candidate)
+                raise PolicyDenied("discovery_candidate_pending")
+            record_sanitized_target_with_ttl(candidate)
+
+    ip = resolve_and_pin_public_ip(target.hostname)
+    return connect_with_hostname_and_pinned_ip(target, ip)
+```
+
+No modo de descoberta totalmente automática, `record_sanitized_target_with_ttl`
+só pode ocorrer depois de `validate_public_target` e dos limites da política.
+Se a organização não tiver uma fronteira verificável de domínio/provedor, o
+default deve ser `approval_required=True`; isso mantém o cadastro simples sem
+conceder ao XUI comprometido uma capacidade de proxy arbitrária.
+
+### 7.6 Sequência de implementação verificável
+
+Para cada alteração, o implementador deve registrar:
+
+```text
+1. migration aplicada e backup verificado;
+2. tenant antigo lido como strict;
+3. snapshot novo validado sem segredo;
+4. serviço broker/relay iniciado em ambiente de laboratório;
+5. teste de VOD 1 e VOD 2;
+6. teste de LB 1 e LB 2;
+7. teste de bloqueio SSRF;
+8. teste de isolamento A/B;
+9. teste de rollback;
+10. release, digest, nginx -t e health;
+11. canário sem alteração DNS;
+12. aprovação formal antes de habilitar descoberta em outro tenant.
+```
+
+Se qualquer item falhar, mantenha a política anterior. Não faça uma migração
+parcial de tenants nem altere o default global para descoberta.
 
 ## 8. Implementação por fases
 
