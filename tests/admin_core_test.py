@@ -47,7 +47,8 @@ with tempfile.TemporaryDirectory() as root:
     assert "location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)" in output.content
     assert "more_clear_headers" not in output.content
     assert "sub_filter 'origin1.test' 'xui1.cdn.test';" in output.content
-    assert "sub_filter 'http://origin1.test:80' 'http://xui1.cdn.test';" in output.content
+    assert "$scheme://xui1.cdn.test" in output.content
+    assert "sub_filter 'http://origin1.test:80' '$scheme://xui1.cdn.test';" in output.content
     assert output.content == render_tenant(db.tenant("xui1")).content
 
     no_vod_output = render_tenant(db.tenant("xui2")).content

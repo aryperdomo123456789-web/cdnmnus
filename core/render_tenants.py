@@ -144,10 +144,10 @@ server {{
         proxy_hide_header Server;
         sub_filter_types *;
         sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
     }}
     location = /player_api.php {{
         proxy_pass http://origin_{tid};
@@ -160,10 +160,10 @@ server {{
         proxy_hide_header X-Powered-By;
         sub_filter_types application/json text/plain *;
         sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
         sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
     }}
     location ~ ^/(?:hls|live)/ {{
@@ -223,12 +223,12 @@ server {{
         proxy_hide_header Server;
         sub_filter_types *;
         sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
         sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
     }}
     location = /player_api.php {{
@@ -242,12 +242,12 @@ server {{
         proxy_hide_header X-Powered-By;
         sub_filter_types application/json text/plain *;
         sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(canonical)}' 'http://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
         sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
     }}
 
