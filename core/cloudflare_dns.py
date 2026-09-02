@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,8 +30,13 @@ class CloudflareDNS:
         if not self.zones:
             raise CloudflareError("zona Cloudflare ausente")
         try:
-            if path.is_file() and path.stat().st_mode & 0o077:
-                raise CloudflareError("arquivo do token Cloudflare deve ter modo 0600")
+            if path.is_file():
+                token_stat = path.stat()
+                mode = stat.S_IMODE(token_stat.st_mode)
+                # O worker roda como cdn-admin; 0640 root:cdn-admin mantém
+                # o token privado e permite a leitura pelo serviço autorizado.
+                if token_stat.st_uid != 0 or mode not in {0o600, 0o640}:
+                    raise CloudflareError("arquivo do token Cloudflare deve ser root e ter modo 0600 ou 0640")
         except OSError:
             pass
 

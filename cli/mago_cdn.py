@@ -24,6 +24,7 @@ from core.node_onboarding import onboard_node
 from core.dns_reconciler import DNSReconciler, reconcile_cluster_dns
 from core.render_tenants import render_tenant
 from core.tenant_onboarding import TenantOnboardingService
+from core.xui_discovery import discover_xui_media
 from core.topology import TopologyStore
 
 DB_PATH = os.environ.get("CDNMNUS_ADMIN_DB", "/var/lib/cdnmnus-admin/admin.db")
@@ -796,16 +797,23 @@ def tenant_add(db: Database) -> None:
     if origin is None: return
     port = ask("Porta da origem", "80")
     if port is None: return
-    lbs = ask("Load balancers separados por vírgula", "")
-    if lbs is None: return
+    m3u_url = ask("URL M3U autorizada (não será armazenada)", password=True)
+    if m3u_url is None: return
+    extra_lbs = ask("Load balancers adicionais (opcional)", "")
+    if extra_lbs is None: return
     try:
+        discovery = discover_xui_media(m3u_url)
+        lbs = tuple(dict.fromkeys(discovery.load_balancers + tuple(
+            x.strip() for x in extra_lbs.split(",") if x.strip())))
         onboarding = TenantOnboardingService(db).register(
             tenant_id, name, canonical, origin, int(port),
-            tuple(x.strip() for x in lbs.split(",") if x.strip()),
+            lbs, discovery.vod_seeds,
         )
         message(
             f"Tenant {tenant_id} cadastrado em onboarding seguro.\n\n"
             f"Estado: {onboarding['state']}\n"
+            f"Descoberta M3U: {discovery.sampled_live} live + {discovery.sampled_vod} VOD; "
+            f"{len(discovery.load_balancers)} LB e {len(discovery.vod_seeds)} seed VOD.\n"
             "Nenhum DNS, TLS ou runtime foi publicado. O tenant só será habilitado "
             "após os gates da transação operacional."
         )

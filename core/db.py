@@ -376,7 +376,8 @@ class Database:
 
     def add_tenant(self, tenant_id: str, name: str, canonical_host: str,
                    origin_host: str, origin_port: int = 80,
-                   load_balancers: Sequence[str] = (), *, enabled: bool = True) -> dict[str, Any]:
+                   load_balancers: Sequence[str] = (), *, vod_seeds: Sequence[str] = (),
+                   enabled: bool = True) -> dict[str, Any]:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         canonical_host = normalize_hostname(canonical_host)
         origin_host = normalize_origin_host(origin_host)
@@ -384,6 +385,7 @@ class Database:
         if not name.strip():
             raise ValueError("nome do tenant é obrigatório")
         lbs = list(dict.fromkeys(normalize_hostname(item) for item in load_balancers if item.strip()))
+        vod = list(dict.fromkeys(normalize_hostname(item) for item in vod_seeds if item.strip()))
         with self.transaction(immediate=True) as db:
             db.execute(
                 "INSERT INTO xui_tenants(id,name,canonical_host,health_host,playlist_host,enabled) VALUES(?,?,?,?,?,?)",
@@ -396,6 +398,9 @@ class Database:
             for host in lbs:
                 db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,80)",
                            (f"lb-{tenant_id}-{uuid.uuid4().hex[:10]}", tenant_id, "lb", host))
+            for host in vod:
+                db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,80)",
+                           (f"vod-{tenant_id}-{uuid.uuid4().hex[:10]}", tenant_id, "vod", host))
         return self.tenant(tenant_id)
 
     def set_tenant_enabled(self, tenant_id: str, enabled: bool, *,

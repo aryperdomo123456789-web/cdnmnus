@@ -20,9 +20,11 @@ class TenantOnboardingService:
 
     def register(self, tenant_id: str, name: str, canonical_host: str,
                  origin_host: str, origin_port: int = 80,
-                 load_balancers: tuple[str, ...] = ()) -> dict[str, Any]:
+                 load_balancers: tuple[str, ...] = (),
+                 vod_seeds: tuple[str, ...] = ()) -> dict[str, Any]:
         tenant = self.db.add_tenant(
             tenant_id, name, canonical_host, origin_host, origin_port, load_balancers,
+            vod_seeds=vod_seeds,
             enabled=False,
         )
         return self.db.begin_tenant_onboarding(
