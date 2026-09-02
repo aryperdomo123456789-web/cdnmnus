@@ -7,7 +7,7 @@
       - cdnmnus_node_state | length > 0
       - cdnmnus_control_plane_host | length > 0
       - cdnmnus_control_plane_host is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
-      - cdnmnus_node_role != 'load_balancer' or cdnmnus_control_plane_host != ansible_host
+      - cdnmnus_node_role != 'load_balancer' or cdnmnus_control_plane_host != ansible_host or cdnmnus_allow_control_plane_lb | bool
     quiet: true
 
 - name: Garantir diretório de identidade do nó

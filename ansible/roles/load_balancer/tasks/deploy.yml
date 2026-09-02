@@ -22,22 +22,30 @@
     - {path: "{{ load_balancer_state_root }}", group: root, mode: '0750'}
     - {path: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}", group: root, mode: '0700'}
 
-- name: Preservar estado edge antes de preparar o papel LB
+- name: Verificar caminhos que podem ser preservados no rollback
+  ansible.builtin.stat:
+    path: "/{{ item }}"
+  loop:
+    - etc/nginx
+    - etc/cdnmnus
+    - opt/cdnmnus/current
+    - opt/cdnmnus/current.json
+    - etc/systemd/system/cdnmnus-tenant-broker@.service
+    - etc/systemd/system/cdnmnus-vod-relay@.service
+  register: lb_backup_paths
+
+- name: Montar lista de caminhos existentes para o rollback
+  ansible.builtin.set_fact:
+    lb_backup_existing_paths: "{{ (lb_backup_existing_paths | default([])) + [item.item] }}"
+  loop: "{{ lb_backup_paths.results }}"
+  when: item.stat.exists
+
+- name: Preservar estado existente antes de preparar o papel LB
   ansible.builtin.command:
-    argv:
-      - tar
-      - -C
-      - /
-      - -cpf
-      - "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/edge-before.tar"
-      - etc/nginx
-      - etc/cdnmnus
-      - opt/cdnmnus/current
-      - opt/cdnmnus/current.json
-      - etc/systemd/system/cdnmnus-tenant-broker@.service
-      - etc/systemd/system/cdnmnus-vod-relay@.service
+    argv: "{{ ['tar', '-C', '/', '-cpf', load_balancer_state_root + '/rollback/' + load_balancer_change_id + '/edge-before.tar'] + (lb_backup_existing_paths | default([])) }}"
   args:
     creates: "{{ load_balancer_state_root }}/rollback/{{ load_balancer_change_id }}/edge-before.tar"
+  when: (lb_backup_existing_paths | default([])) | length > 0
 
 - name: Proteger backup anterior ao papel LB
   ansible.builtin.file:
