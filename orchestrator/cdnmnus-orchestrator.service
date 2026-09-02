@@ -23,16 +23,8 @@ NoNewPrivileges=false
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt
-# The worker uses the narrowly allowlisted ACME helper through sudo. Keeping
-# this restriction enabled implicitly sets NoNewPrivileges on some systemd
-# versions and prevents that single, audited elevation path.
-RestrictSUIDSGID=false
-LockPersonality=true
-RestrictRealtime=true
-ProtectClock=true
-ProtectHostname=true
-ProtectKernelLogs=true
-SystemCallArchitectures=native
+# Keep this worker unprivileged; only the exact ACME helper is allowlisted in
+# sudoers. Avoid sandbox directives that implicitly enable no_new_privs.
 UMask=0077
 
 [Install]
