@@ -134,3 +134,11 @@
     group: root
     mode: '0440'
     validate: /usr/sbin/visudo -cf %s
+
+- name: Instalar receptor TLS versionado
+  ansible.builtin.copy:
+    src: "{{ project_root }}/scripts/install_tls_from_stdin.sh"
+    dest: /usr/local/sbin/cdnmnus-install-tls
+    owner: root
+    group: root
+    mode: '0755'

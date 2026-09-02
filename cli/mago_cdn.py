@@ -23,6 +23,7 @@ from core.deploy import queue_deployment
 from core.node_onboarding import onboard_node
 from core.dns_reconciler import DNSReconciler, reconcile_cluster_dns
 from core.render_tenants import render_tenant
+from core.tenant_onboarding import TenantOnboardingService
 from core.topology import TopologyStore
 
 DB_PATH = os.environ.get("CDNMNUS_ADMIN_DB", "/var/lib/cdnmnus-admin/admin.db")
@@ -776,7 +777,9 @@ def tenant_list(db: Database) -> None:
     tenants = db.tenants()
     lines = []
     for item in tenants:
-        lines.append(f"{item['id']} | {item['name']} | {item['canonical_host']} | v{item['config_version']}")
+        onboarding = db.tenant_onboarding(item['id'])
+        onboarding_state = onboarding['state'] if onboarding else ("committed" if item['enabled'] else "disabled")
+        lines.append(f"{item['id']} | {item['name']} | {item['canonical_host']} | v{item['config_version']} | onboarding {onboarding_state}")
         lines.extend(f"  - {host['hostname']} | TLS {host['tls_status']}" for host in item["hosts"])
         lines.extend(f"  - origem {up['kind']}: {up['host']}:{up['port']}" for up in item["upstreams"])
     message("TENANTS / XUIs\n\n" + ("\n".join(lines) if lines else "Nenhum tenant cadastrado."))
@@ -795,16 +798,19 @@ def tenant_add(db: Database) -> None:
     if port is None: return
     lbs = ask("Load balancers separados por vírgula", "")
     if lbs is None: return
-    tenant = db.add_tenant(tenant_id, name, canonical, origin, int(port), [x.strip() for x in lbs.split(",") if x.strip()])
-    tls_job = db.enqueue_tls_job(tenant_id)
     try:
-        records = DNSReconciler(CloudflareDNS(), db=db, operator="mago-cdn-menu").apply_tenant(tenant)
-        message(f"Tenant {tenant_id} cadastrado, TLS enfileirado e DNS Cloudflare reconciliado.\n"
-                f"Job TLS: {tls_job['id']}\n\n" +
-                "\n".join(f"{x['name']} CNAME {x['content']} DNS-only" for x in records))
-    except CloudflareError as exc:
-        message(f"Tenant {tenant_id} salvo localmente e TLS enfileirado, mas DNS Cloudflare não foi aplicado.\n\n{exc}\n\n"
-                "Não publique o hostname até configurar o token e executar a reconciliação.")
+        onboarding = TenantOnboardingService(db).register(
+            tenant_id, name, canonical, origin, int(port),
+            tuple(x.strip() for x in lbs.split(",") if x.strip()),
+        )
+        message(
+            f"Tenant {tenant_id} cadastrado em onboarding seguro.\n\n"
+            f"Estado: {onboarding['state']}\n"
+            "Nenhum DNS, TLS ou runtime foi publicado. O tenant só será habilitado "
+            "após os gates da transação operacional."
+        )
+    except (CloudflareError, ValueError) as exc:
+        message(f"Cadastro recusado; nenhum estado público foi alterado.\n\n{exc}")
 
 
 def tenant_cname(db: Database) -> None:

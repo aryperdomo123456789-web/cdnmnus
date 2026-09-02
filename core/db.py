@@ -268,6 +268,34 @@ class Database:
                     decision_id TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS tenant_onboarding (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL UNIQUE REFERENCES xui_tenants(id) ON DELETE CASCADE,
+                    state TEXT NOT NULL CHECK(state IN
+                        ('pending','staging','verifying','committed','rolled_back','failed')),
+                    release_id TEXT,
+                    deployment_id TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS tenant_onboarding_events (
+                    id TEXT PRIMARY KEY,
+                    onboarding_id TEXT NOT NULL REFERENCES tenant_onboarding(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    payload_sanitized TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS tenant_events (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL REFERENCES xui_tenants(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    operator TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    payload_sanitized TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS node_id_sequence (
                     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                     next_id INTEGER NOT NULL CHECK(next_id > 0)
@@ -369,6 +397,91 @@ class Database:
                 db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,80)",
                            (f"lb-{tenant_id}-{uuid.uuid4().hex[:10]}", tenant_id, "lb", host))
         return self.tenant(tenant_id)
+
+    def set_tenant_enabled(self, tenant_id: str, enabled: bool, *,
+                           operator: str = "control-plane", reason: str = "state transition") -> dict[str, Any]:
+        """Muda a publicação do tenant com evento auditável e sem tocar em outros tenants."""
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        operator = re.sub(r"[^a-zA-Z0-9_.@-]", "_", operator.strip())[:128]
+        reason = str(_sanitized_event_payload(reason.strip())).replace("\n", " ")[:512]
+        if not operator or not reason:
+            raise ValueError("operador e motivo são obrigatórios")
+        with self.transaction(immediate=True) as db:
+            current = db.execute("SELECT enabled FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone()
+            if current is None:
+                raise ValueError("tenant não encontrado")
+            db.execute("UPDATE xui_tenants SET enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (int(bool(enabled)), tenant_id))
+            db.execute(
+                "INSERT INTO tenant_events(id,tenant_id,event_type,operator,reason,payload_sanitized) VALUES(?,?,?,?,?,?)",
+                ("tenant-evt-" + uuid.uuid4().hex, tenant_id, "enabled_changed", operator, reason,
+                 json.dumps({"old": bool(current["enabled"]), "new": bool(enabled)}, sort_keys=True)),
+            )
+        return self.tenant(tenant_id)
+
+    def begin_tenant_onboarding(self, tenant_id: str, *, operator: str = "control-plane",
+                                reason: str = "tenant onboarding iniciado") -> dict[str, Any]:
+        """Cria o marcador de saga antes de qualquer efeito externo."""
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        with self.transaction(immediate=True) as db:
+            tenant = db.execute("SELECT enabled FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone()
+            if tenant is None:
+                raise ValueError("tenant não encontrado")
+            if tenant["enabled"]:
+                raise ValueError("tenant deve iniciar desabilitado")
+            existing = db.execute("SELECT * FROM tenant_onboarding WHERE tenant_id=?", (tenant_id,)).fetchone()
+            if existing and existing["state"] in {"pending", "staging", "verifying"}:
+                raise ValueError("onboarding já está em andamento")
+            onboarding_id = existing["id"] if existing else "onb-" + uuid.uuid4().hex
+            if existing:
+                db.execute("""UPDATE tenant_onboarding SET state='pending',release_id=NULL,
+                           deployment_id=NULL,error=NULL,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?""",
+                           (tenant_id,))
+            else:
+                db.execute("INSERT INTO tenant_onboarding(id,tenant_id,state) VALUES(?,?, 'pending')",
+                           (onboarding_id, tenant_id))
+            db.execute("INSERT INTO tenant_onboarding_events(id,onboarding_id,event_type,reason) VALUES(?,?,?,?)",
+                       ("onb-evt-" + uuid.uuid4().hex, onboarding_id, "started", _sanitize_tls_error(reason)))
+        return self.tenant_onboarding(tenant_id)
+
+    def tenant_onboarding(self, tenant_id: str) -> dict[str, Any] | None:
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        rows = self.rows("SELECT * FROM tenant_onboarding WHERE tenant_id=?", (tenant_id,))
+        return rows[0] if rows else None
+
+    def claim_tenant_onboarding(self) -> dict[str, Any] | None:
+        """Reserva um onboarding pendente para um único worker."""
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT * FROM tenant_onboarding WHERE state='pending' ORDER BY created_at,id LIMIT 1").fetchone()
+            if row is None:
+                return None
+            changed = db.execute(
+                "UPDATE tenant_onboarding SET state='staging',updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='pending'",
+                (row["id"],),
+            )
+            if changed.rowcount != 1:
+                return None
+            db.execute("INSERT INTO tenant_onboarding_events(id,onboarding_id,event_type,reason) VALUES(?,?,?,?)",
+                       ("onb-evt-" + uuid.uuid4().hex, row["id"], "claimed", "worker reservou o onboarding"))
+            return dict(db.execute("SELECT * FROM tenant_onboarding WHERE id=?", (row["id"],)).fetchone())
+
+    def update_tenant_onboarding(self, tenant_id: str, state: str, *, reason: str,
+                                 release_id: str | None = None, deployment_id: str | None = None,
+                                 error: str | None = None) -> dict[str, Any]:
+        if state not in {"pending", "staging", "verifying", "committed", "rolled_back", "failed"}:
+            raise ValueError("estado de onboarding inválido")
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT * FROM tenant_onboarding WHERE tenant_id=?", (tenant_id,)).fetchone()
+            if row is None:
+                raise ValueError("onboarding não encontrado")
+            db.execute("""UPDATE tenant_onboarding SET state=?,release_id=COALESCE(?,release_id),
+                       deployment_id=COALESCE(?,deployment_id),error=?,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?""",
+                       (state, release_id, deployment_id, _sanitize_tls_error(error) if error else None, tenant_id))
+            db.execute("INSERT INTO tenant_onboarding_events(id,onboarding_id,event_type,reason,payload_sanitized) VALUES(?,?,?,?,?)",
+                       ("onb-evt-" + uuid.uuid4().hex, row["id"], state, _sanitize_tls_error(reason),
+                        json.dumps(_sanitized_event_payload({"release_id": release_id, "deployment_id": deployment_id}), sort_keys=True)))
+        return self.tenant_onboarding(tenant_id) or {}
 
     def migrate_tenant_identity(self, old_id: str, new_id: str, canonical_host: str,
                                 *, remove_hosts: Sequence[str] = (),

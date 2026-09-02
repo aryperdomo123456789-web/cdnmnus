@@ -46,7 +46,12 @@ def main() -> int:
     topology.initialize()
     changed = False
     results = []
-    tenants = db.tenants(enabled_only=True)
+    active_onboardings = {
+        row["tenant_id"] for row in db.rows(
+            "SELECT tenant_id FROM tenant_onboarding WHERE state IN ('pending','staging','verifying')"
+        )
+    }
+    tenants = [item for item in db.tenants(enabled_only=True) if item["id"] not in active_onboardings]
     if not tenants:
         return 0
     hosts = [str(item.get("health_host") or item["canonical_host"]) for item in tenants]

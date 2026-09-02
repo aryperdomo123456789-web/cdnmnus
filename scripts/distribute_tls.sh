@@ -28,7 +28,8 @@ while IFS='|' read -r edge_name host port user identity known_hosts; do
     fi
     ssh_opts=(-i "$identity" -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts")
     if tar -h -C "$lineage" -cf - fullchain.pem privkey.pem | \
-        ssh "${ssh_opts[@]}" "$user@$host" sudo /usr/local/sbin/cdnmnus-install-tls "$cert_name" "$local_fingerprint"
+        ssh "${ssh_opts[@]}" "$user@$host" sudo -n /usr/local/sbin/cdnmnus-ansible-become \
+            /usr/local/sbin/cdnmnus-install-tls "$cert_name" "$local_fingerprint"
     then
         echo "edge=$edge_name status=updated fingerprint=$local_fingerprint"
     else

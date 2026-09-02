@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -49,13 +51,60 @@ class TLSProvisioner:
                  acme_helper: str = "/opt/cdnmnus/scripts/cdnmnus-acme-helper",
                  distribution_script: str = "/opt/cdnmnus/scripts/distribute_tls.sh",
                  live_root: str = "/etc/letsencrypt/live",
-                 edge_ips: Sequence[str] = ("143.14.168.168", "143.14.168.170")) -> None:
+                 edge_ips: Sequence[str] = ("143.14.168.168", "143.14.168.170", "143.14.168.78")) -> None:
         self.database = database
         self.runner = runner
         self.acme_helper = acme_helper
         self.distribution_script = distribution_script
         self.live_root = Path(live_root)
         self.edge_ips = tuple(edge_ips)
+
+    def stage_shared_certificate(self, tenant_id: str, *, source: str = "/var/lib/cdnmnus-admin/tls-source") -> callable:
+        """Emite SAN para todos os tenants ativos e devolve rollback do arquivo-fonte."""
+        candidate = self.database.tenant(tenant_id)
+        tenants = self.database.tenants(enabled_only=True)
+        if all(item["id"] != tenant_id for item in tenants):
+            tenants.append(candidate)
+        hosts = sorted({str(host["hostname"]).lower() for item in tenants for host in item.get("hosts", [])})
+        canonical = str(self.database.setting("managed_canonical_host", "cdn.phpd77.com"))
+        sans = sorted({canonical, *hosts})
+        action = "renew" if (self.live_root / canonical / "fullchain.pem").is_file() else "issue"
+        result = self._run(
+            ["sudo", self.acme_helper, "--action", action, "--canonical", canonical,
+             "--sans", ",".join(sans), "--tenant-id", "shared"],
+            stage="shared-acme", timeout=900,
+        )
+        try:
+            payload = json.loads(result.stdout.strip())
+            lineage = Path(str(payload["lineage"])).resolve()
+            if lineage != (self.live_root / canonical).resolve():
+                raise TLSProvisionError("lineage compartilhada divergente")
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise TLSProvisionError("resposta compartilhada ACME inválida") from exc
+        self._validate_sans(lineage, sans)
+        target = Path(source)
+        target.mkdir(mode=0o750, parents=True, exist_ok=True)
+        files = {name: target / name for name in ("fullchain.pem", "privkey.pem")}
+        backups: dict[Path, bytes | None] = {path: path.read_bytes() if path.exists() else None for path in files.values()}
+        for name, path in files.items():
+            fd, staged_name = tempfile.mkstemp(prefix=f".{name}.", dir=target)
+            os.close(fd)
+            staged = Path(staged_name)
+            try:
+                shutil.copyfile(lineage / name, staged)
+                os.chmod(staged, 0o640)
+                os.replace(staged, path)
+            finally:
+                staged.unlink(missing_ok=True)
+
+        def rollback() -> None:
+            for path, content in backups.items():
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(content)
+                    os.chmod(path, 0o640)
+        return rollback
 
     def _tenant_hosts(self, tenant_id: str) -> tuple[dict[str, Any], list[str]]:
         tenant = self.database.tenant(tenant_id)

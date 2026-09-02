@@ -15,6 +15,9 @@ if str(ROOT) not in sys.path:
 from core.db import Database
 from core.deploy import claim_deployment, run_deployment
 from core.tls_provisioner import TLSProvisioner
+from core.dns_reconciler import reconcile_cluster_dns
+from core.tenant_onboarding import TenantOnboardingService
+from core.deploy import queue_deployment
 
 
 def main() -> None:
@@ -29,6 +32,22 @@ def main() -> None:
     args = parser.parse_args()
     db = Database(args.db); db.initialize()
     while True:
+        onboarding = db.claim_tenant_onboarding()
+        if onboarding is not None:
+            tenant_id = onboarding["tenant_id"]
+            service = TenantOnboardingService(db, operator="onboarding-worker")
+            try:
+                result = service.execute(
+                    tenant_id,
+                    stage_tls=lambda: TLSProvisioner(db).stage_shared_certificate(tenant_id),
+                    deploy=lambda: _run_onboarding_deploy(db),
+                    verify=lambda: TLSProvisioner(db).provision(tenant_id),
+                    publish_dns=lambda: reconcile_cluster_dns(db, operator="onboarding-worker"),
+                )
+                print(f"tenant onboarding {tenant_id} committed: {result.get('release_id', '')}")
+            except Exception as exc:
+                print(f"tenant onboarding {tenant_id} failed: {exc}", file=sys.stderr)
+            continue
         deployment = claim_deployment(db)
         if deployment is not None:
             try:
@@ -51,6 +70,14 @@ def main() -> None:
         if args.once:
             return
         time.sleep(2)
+
+
+def _run_onboarding_deploy(db: Database) -> dict[str, object]:
+    queued = queue_deployment(db)
+    claimed = claim_deployment(db)
+    if claimed is None or claimed["id"] != queued["deployment_id"]:
+        raise RuntimeError("deployment do onboarding não pôde ser reservado")
+    return run_deployment(db, claimed)
 
 
 if __name__ == "__main__":
