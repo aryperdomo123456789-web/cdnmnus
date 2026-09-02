@@ -107,14 +107,21 @@
     - {path: /opt/cdnmnus/releases, owner: root, group: root, mode: '0755'}
     - {path: /var/cache/nginx/cdnmnus, owner: www-data, group: www-data, mode: '0750'}
 
-- name: Instalar helper root-only de become do Ansible
-  ansible.builtin.copy:
-    src: /opt/cdnmnus/scripts/cdnmnus-ansible-become
-    dest: /usr/local/sbin/cdnmnus-ansible-become
-    remote_src: true
-    owner: root
-    group: root
-    mode: '0755'
+- name: Verificar helper root-only de become do Ansible
+  ansible.builtin.stat:
+    path: /usr/local/sbin/cdnmnus-ansible-become
+    checksum_algorithm: sha256
+  register: ansible_become_helper
+
+- name: Recusar edge sem helper de become aprovado
+  ansible.builtin.assert:
+    that:
+      - ansible_become_helper.stat.exists
+      - ansible_become_helper.stat.pw_name == 'root'
+      - ansible_become_helper.stat.mode == '0755'
+      - ansible_become_helper.stat.checksum == 'feebc69470e7f5628714e33df84945e8ae9f44547cac84351aabd4ad158ed5ad'
+    fail_msg: 'helper de become ausente, inseguro ou divergente do pacote aprovado'
+    quiet: true
 
 - name: Restringir sudo do usuário de deployment ao helper do control plane
   ansible.builtin.copy:
