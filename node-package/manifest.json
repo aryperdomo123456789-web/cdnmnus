@@ -9,8 +9,8 @@
     "panel/cdnmnus-vod-relay@.service": "9e0dc86e8b4ec47592a111768a84c4aa59d204247c2e047ce0ead446dab88e6d",
     "panel/multi_tenant_broker.py": "1f4085ca91574918a41a1b8deea961fa941644b160457bb9aca7a0569363f032",
     "panel/vod_relay.py": "d0c5ab8f76ec44d08fcb686ad994eff6054e63d47397c0df1177923ca3c186e3",
-    "scripts/cdnmnus-ansible-become": "14e9fed8a4be70ac48e4de3edf5d025999e93e64411e5563d9f5c609642e759c"
+    "scripts/cdnmnus-ansible-become": "feebc69470e7f5628714e33df84945e8ae9f44547cac84351aabd4ad158ed5ad"
   },
   "schema_version": 1,
-  "source_ref": "v0.5.0-managed-node.18"
+  "source_ref": "v0.5.0-managed-node.19"
 }
