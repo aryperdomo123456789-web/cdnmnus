@@ -115,6 +115,9 @@ Para aliases CNAME DNS-only, siga também a receita executável
 adiciona a camada `--cname` ao laboratório e valida o fluxo de uma aplicação
 real, incluindo `Range` VOD e sanitização de credenciais.
 
+Para descoberta segura de aliases ainda nao cadastrados, siga também
+[RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md](RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md).
+
 O laboratório oficial fica em:
 
 - [lab-player/README.md](/opt/cdnmnus/lab-player/README.md)
