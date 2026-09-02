@@ -40,10 +40,15 @@ def command_args(args: list[str]) -> list[str]:
 
 
 def main() -> int:
-    if os.geteuid() != 0:
-        raise SystemExit("helper precisa ser executado pelo sudo")
     if source_address() != configured_control_plane():
         raise SystemExit("origem SSH não é o control plane autorizado")
+    if os.geteuid() != 0:
+        # ansible_become_exe é chamado diretamente pelo usuário de deploy;
+        # a única elevação permitida é uma segunda execução deste helper.
+        os.execv(
+            "/usr/bin/sudo",
+            ["sudo", "-n", "/usr/local/sbin/cdnmnus-ansible-become", *sys.argv[1:]],
+        )
     command = command_args(sys.argv[1:])
     if command[0] in {"sudo", "su", "ssh"}:
         raise SystemExit("encadeamento de privilégio recusado")

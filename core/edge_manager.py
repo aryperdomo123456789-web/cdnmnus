@@ -169,7 +169,7 @@ def bootstrap_edge(host: str, port: int, initial_user: str, password: str,
             f"printf '%s\\n' {quoted_helper} > /usr/local/sbin/cdnmnus-ansible-become; "
             "chown root:root /usr/local/sbin/cdnmnus-ansible-become; "
             "chmod 755 /usr/local/sbin/cdnmnus-ansible-become; "
-            "printf 'cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-ansible-become *\\n' > /etc/sudoers.d/cdn-deploy; "
+            "printf 'Defaults:cdn-deploy env_keep += \"SSH_CONNECTION\"\\ncdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-ansible-become *\\n' > /etc/sudoers.d/cdn-deploy; "
             "chmod 440 /etc/sudoers.d/cdn-deploy; visudo -cf /etc/sudoers.d/cdn-deploy >/dev/null; "
             "echo CDNMNUS_BOOTSTRAP_OK"
         )
