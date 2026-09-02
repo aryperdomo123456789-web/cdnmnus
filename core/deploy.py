@@ -314,10 +314,14 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
         error = None
     else:
         # O Ansible pode conter caminhos e nomes de hosts, mas não deve levar
-        # argv/env com credenciais. Guardamos somente as últimas linhas para
-        # diagnóstico operacional no painel/journal.
-        tail = "\n".join((result.stderr or result.stdout).splitlines()[-8:])
-        error = "ansible-playbook falhou; resumo sanitizado:\n" + tail[:2000]
+        # argv/env com credenciais. Preserve também o erro fatal para não
+        # transformar uma falha parcial em diagnóstico por tentativa e erro.
+        output_lines = (result.stderr or result.stdout).splitlines()
+        evidence = [line for line in output_lines
+                    if re.search(r"\b(?:fatal|failed|msg|error)\b", line, re.IGNORECASE)]
+        tail = output_lines[-8:]
+        selected = evidence[-12:] + [line for line in tail if line not in evidence]
+        error = "ansible-playbook falhou; resumo sanitizado:\n" + "\n".join(selected)[:4000]
     with closing(db.connect()) as conn, conn:
         conn.execute("UPDATE deployments SET state=?,error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",
                      (state, error, deployment["id"]))
