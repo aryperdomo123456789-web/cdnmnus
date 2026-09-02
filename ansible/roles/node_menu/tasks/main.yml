@@ -184,6 +184,15 @@
     mode: '0750'
   when: cdnmnus_node_role == 'control_plane'
 
+- name: Garantir staging TLS gravável somente pelo worker do control plane
+  ansible.builtin.file:
+    path: /var/lib/cdnmnus-admin/tls-source
+    state: directory
+    owner: root
+    group: cdn-admin
+    mode: '0770'
+  when: cdnmnus_node_role == 'control_plane'
+
 - name: Instalar sudoers mínimo do helper ACME
   ansible.builtin.copy:
     src: cdnmnus-acme.sudoers
