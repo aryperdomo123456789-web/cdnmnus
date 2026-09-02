@@ -211,6 +211,15 @@
     mode: '0640'
   when: cdnmnus_node_role == 'control_plane'
 
+- name: Permitir leitura do token DNS somente ao worker do control plane
+  ansible.builtin.file:
+    path: /etc/cdnmnus/cloudflare/api-token
+    state: file
+    owner: root
+    group: cdn-admin
+    mode: '0640'
+  when: cdnmnus_node_role == 'control_plane'
+
 - name: Instalar sudoers mínimo do helper ACME
   ansible.builtin.copy:
     src: cdnmnus-acme.sudoers
