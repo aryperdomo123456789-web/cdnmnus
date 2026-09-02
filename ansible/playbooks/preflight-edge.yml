@@ -35,21 +35,26 @@
         that: edge_ntp_synchronized.stdout | trim == 'yes'
         quiet: true
 
-    - name: Conferir acesso TCP à origem XUI
+    - name: Conferir acesso TCP a cada origem XUI do snapshot candidato
       ansible.builtin.wait_for:
-        host: "{{ xui_origin_host }}"
-        port: "{{ xui_origin_port | default(80) }}"
+        host: "{{ item.origin.host }}"
+        port: "{{ item.origin.port }}"
         timeout: 8
         state: started
-      when: xui_origin_host is defined
+      loop: "{{ tenant_contexts | default([]) }}"
+      loop_control:
+        label: "{{ item.tenant_id }}"
 
-    - name: Conferir acesso TCP aos load balancers autorizados
+    - name: Conferir acesso TCP aos load balancers autorizados de cada tenant
       ansible.builtin.wait_for:
-        host: "{{ item }}"
-        port: 80
+        host: "{{ upstream.host }}"
+        port: "{{ upstream.port }}"
         timeout: 8
         state: started
-      loop: "{{ xui_load_balancers | default([]) }}"
+      loop: "{{ tenant_contexts | map(attribute='load_balancers') | flatten }}"
+      loop_control:
+        loop_var: upstream
+        label: "{{ upstream.host }}:{{ upstream.port }}"
 
     - name: Coletar serviços atualmente disponíveis
       ansible.builtin.service_facts:

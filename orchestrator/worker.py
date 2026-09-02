@@ -41,7 +41,7 @@ def main() -> None:
                     tenant_id,
                     stage_tls=lambda: TLSProvisioner(db).stage_shared_certificate(tenant_id),
                     deploy=lambda: _run_onboarding_deploy(db),
-                    verify=lambda: TLSProvisioner(db).provision(tenant_id),
+                    verify=lambda: TLSProvisioner(db).verify_staged(tenant_id),
                     publish_dns=lambda: reconcile_cluster_dns(db, operator="onboarding-worker"),
                 )
                 print(f"tenant onboarding {tenant_id} committed: {result.get('release_id', '')}")

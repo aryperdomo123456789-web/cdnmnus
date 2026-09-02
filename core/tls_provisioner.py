@@ -254,3 +254,25 @@ class TLSProvisioner:
                 if job_id is None or "não está mais sob posse" not in str(status_exc):
                     raise
             raise TLSProvisionError(reason) from exc
+
+    def verify_staged(self, tenant_id: str,
+                      source: str = "/var/lib/cdnmnus-admin/tls-source") -> dict[str, Any]:
+        """Verifica o certificado staged e as edges sem emitir outro ACME.
+
+        O onboarding já emitiu o SAN compartilhado antes do deployment. Reemitir
+        aqui introduziria uma dependência desnecessária de permissões na árvore
+        privada do Certbot e poderia consumir a cota ACME.
+        """
+        tenant, hosts = self._tenant_hosts(tenant_id)
+        lineage = Path(source)
+        fullchain = lineage / "fullchain.pem"
+        privkey = lineage / "privkey.pem"
+        if not fullchain.is_file() or not privkey.is_file():
+            raise TLSProvisionError("certificado staged incompleto")
+        evidence = self._validate_sans(lineage, hosts)
+        evidence["edges"] = self._health(tenant, hosts)
+        self.database.set_tls_status(
+            tenant_id, "valid", operator="tls-provisioner",
+            reason="certificado staged, SAN e health aprovados", evidence=evidence,
+        )
+        return {"tenant_id": tenant_id, "status": "valid", **evidence}

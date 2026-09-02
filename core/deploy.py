@@ -315,10 +315,21 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
     try:
         ansible_environment = os.environ.copy()
         ansible_environment["ANSIBLE_CONFIG"] = str(Path(__file__).resolve().parents[1] / "ansible/ansible.cfg")
-        result = subprocess.run(
-            command, cwd=Path(__file__).resolve().parents[1], env=ansible_environment,
-            capture_output=True, text=True, timeout=3600, check=False,
-        )
+        timeout_seconds = int(os.environ.get("CDNMNUS_DEPLOY_TIMEOUT_SECONDS", "1800"))
+        try:
+            result = subprocess.run(
+                command, cwd=Path(__file__).resolve().parents[1], env=ansible_environment,
+                capture_output=True, text=True, timeout=timeout_seconds,
+                check=False, start_new_session=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            error = f"ansible-playbook timeout após {timeout_seconds}s; release anterior preservada"
+            with closing(db.connect()) as conn, conn:
+                conn.execute(
+                    "UPDATE deployments SET state='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (error, deployment["id"]),
+                )
+            raise RuntimeError(error) from exc
     finally:
         if generated_inventory is not None:
             generated_inventory.unlink(missing_ok=True)
