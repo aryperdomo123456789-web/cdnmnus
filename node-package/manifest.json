@@ -12,5 +12,5 @@
     "scripts/cdnmnus-ansible-become": "14e9fed8a4be70ac48e4de3edf5d025999e93e64411e5563d9f5c609642e759c"
   },
   "schema_version": 1,
-  "source_ref": "v0.5.0-managed-node.17"
+  "source_ref": "v0.5.0-managed-node.18"
 }
