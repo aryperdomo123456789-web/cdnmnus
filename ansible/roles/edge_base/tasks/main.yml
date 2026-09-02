@@ -36,6 +36,13 @@
     group: root
     mode: '0644'
 
+- name: Remover diretiva antiga duplicada do vhost padrão
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/conf.d/97-cdnmnus-default.conf
+    regexp: '^\s*server_tokens\s+'
+    state: absent
+  failed_when: false
+
 - name: Instalar sysctl conservador da edge
   ansible.builtin.copy:
     content: |
