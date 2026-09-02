@@ -137,8 +137,9 @@ O modelo vigente é DNS-only: `.111` é o controlador ativo, `.237` é standby e
 `.168/.170/.78` são o pool de dados. HAProxy frontal permanece exclusivamente
 laboratorial; o control plane não recebe streams.
 
-Não existe lease/fencing ativo, health recente ou capacidade declarada para o
-`.237`. Portanto ele é candidato operacional, não LB de produção.
+O `.237` é standby do controlador DNS. Fencing externo continua sendo um gate
+para executar failover, mas nenhum dos dois controladores participa do tráfego
+de mídia.
 
 ### Registro efetivo no banco autoritativo
 
@@ -266,10 +267,9 @@ inicia HAProxy nem publica tráfego.
 - A política de UFW foi amarrada ao fluxo de ativação e ao instalador para
   preservar `22/80/443` públicos em todos os nós. A exceção `1455/tcp` é específica
   da `.111` e não faz parte do baseline genérico.
-- O `.111` é o control plane atual e o LB ACTIVE planejado; o `.237` é o LB
-  remoto standby. Release, capacidade, health, lease e fencing ainda precisam
-  ser comprovados antes da publicação. O `.111` continua `candidate` até ser
-  preparado como LB ACTIVE.
+- O `.111` é o controlador DNS ativo e o `.237` é o controlador standby.
+  HAProxy frontal não é caminho de produção; release, capacidade, health,
+  lease e fencing só governam o failover do controle DNS.
 - `panel/` ainda existe como superfície de broker/relay e precisa ser entendido
   como contrato de runtime, não como fonte única de verdade para operação.
 - O relay Python passou a validação funcional real e carga curta, mas os gates

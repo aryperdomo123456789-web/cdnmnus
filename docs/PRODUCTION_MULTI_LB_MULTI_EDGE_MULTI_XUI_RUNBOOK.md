@@ -392,27 +392,27 @@ Testar partição de rede, processo travado, dois operadores, lease expirando,
 API de fencing falhando e retorno do antigo ACTIVE. Em nenhum cenário podem
 existir dois ACTIVE com fencing token válido.
 
-### Passo 10 — Preparar `.111` como LB ACTIVE sem DNS
+### Passo 10 — Reconciliar o pool DNS-only
 
-1. preservar o control plane atual e testar console/rollback;
-2. preparar HAProxy local sem remover os serviços do control plane;
-3. executar preflight de capacidade, NTP, storage e portas;
-4. instalar HAProxy sem publicar DNS;
-5. distribuir TLS via secret store/DNS-01;
-6. configurar `.168`, `.170` e `.78` como backends;
-7. validar `haproxy -c`, `/lb-health`, health das edges e mídia;
-8. manter o endpoint público atual até o canário ser aprovado;
-9. registrar `.111` como candidato a ACTIVE.
+1. confirmar `.111` como controlador DNS ativo e `.237` como standby;
+2. executar o health controller e validar HTTPS, SNI e `/edge-health` nas três
+   edges;
+3. confirmar que `cdn.phpd77.com` publica somente `.168`, `.170` e `.78`;
+4. registrar capacidade declarada, margem e amostras reais sem alterar pesos
+   artificialmente;
+5. simular a retirada de uma edge e confirmar que novas resoluções não a
+   recebem;
+6. restaurar a edge somente após a histerese de recuperação.
 
-Aceite: `haproxy -c`, health das três edges, portas administrativas privadas e
-nenhum A/AAAA público apontando diretamente para a origem.
+Aceite: o pool contém todas as edges saudáveis, nenhum controlador aparece no
+DNS público e nenhuma sessão existente é interrompida pelo reconciliador.
 
-### Passo 11 — Testar `.111 -> .168/.170/.78`
+### Passo 11 — Validar cada edge diretamente pelo CNAME
 
 Health sem alterar DNS:
 
 ```bash
-curl --fail --resolve cdn.phpd77.com:443:143.14.168.111 \
+curl --fail --resolve cdn.phpd77.com:443:143.14.168.168 \
   https://cdn.phpd77.com/edge-health
 ```
 
@@ -423,10 +423,10 @@ Não imprima a URL.
 Aceite:
 
 - [ ] nenhum vazamento;
-- [ ] LB sem cache;
+- [ ] cada edge responde sem cache indevido;
 - [ ] drain preserva conexões existentes;
-- [ ] failover fica dentro do SLO;
-- [ ] rollback do `.237` aprovado.
+- [ ] failover do controlador exige isolamento, lease e fencing;
+- [ ] `.237` permanece standby fora do tráfego normal.
 
 ### Passo 12 — Preparar `.237` como standby sem DNS
 
@@ -564,8 +564,8 @@ atual, active/standby continua recomendado.
 - copiar SQLite ativo;
 - usar `git reset --hard` como rollback;
 - publicar DNS antes do canário;
-- transformar `.111` em LB sem capacidade nas outras edges;
-- manter `.111` EDGE e LB ACTIVE;
+- transformar `.111` em proxy público sem uma decisão arquitetural nova;
+- colocar controladores no pool DNS-only das edges;
 - chamar round-robin DNS de failover;
 - usar apenas SSH/systemctl como fencing;
 - colocar cache, broker ou relay no LB frontal;

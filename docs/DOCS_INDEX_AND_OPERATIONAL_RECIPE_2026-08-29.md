@@ -1,6 +1,6 @@
 # Índice documental e receita operacional
 
-Data-base: 2026-09-01
+Data-base: 2026-09-02
 
 Este documento existe para reduzir ambiguidade. Ele organiza a documentação
 atual em uma ordem de leitura e de execução que acompanha o estado real do
@@ -9,7 +9,7 @@ repositório.
 Documentos com data anterior continuam disponíveis como evidência histórica.
 Eles não devem ser usados para afirmar o estado atual quando divergirem de
 [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md). As receitas normativas
-atuais são o runbook de produção, a receita de capacidade, a receita de
+atuais são o runbook de produção DNS-only, a receita de capacidade, a receita de
 certificados/tokens/cache e o runbook Cloudflare atualizado.
 
 ## 1. Verdade operacional atual
@@ -140,8 +140,8 @@ Ele serve para:
 
 ## 5. O que está bloqueado
 
-Até o LB principal `.111`, o standby `.237` e os locks/fencing passarem pelos
-gates reais, não deve ser tratado como pronto:
+Até o controlador ativo `.111`, o standby `.237` e os locks/fencing passarem
+pelos gates reais, o failover não deve ser tratado como pronto:
 
 - `.111` ACTIVE sem lease/fencing comprovados;
 - `.237` ACTIVE ou recebendo tráfego fora de um failover controlado;
@@ -165,7 +165,7 @@ Depois que esta base estiver estável, o próximo documento útil é um
 Para a evolução de capacidade, pesos, onboarding automático e failover entre
 LBs, use agora [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md).
 
-Para implementar de forma guiada os cinco bloqueios atuais do LB, use a
+Para consultar os gates históricos do laboratório de LB, use a
 [receita das cinco frentes para 10/10](RECEITA_5_FRENTES_LB_10_DE_10_2026-09-02.md).
 
 Para certificados que cubrem novos subdomínios, transformação de playlists

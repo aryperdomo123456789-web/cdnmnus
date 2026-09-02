@@ -33,13 +33,15 @@ terminam na edge escolhida pelo cliente.
 
 | nó | função/estado | release | observação |
 |---|---|---|---|
-| `143.14.168.111` | control plane + LB candidate | não ativo | preparar como LB principal, sem colocá-lo no pool de edges |
-| `45.140.192.237` | LB lógico/standby | release antiga de laboratório | preparar como standby remoto, sem tráfego |
-| `143.14.168.168` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
-| `143.14.168.170` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
+| `143.14.168.111` | controlador DNS ativo | release gerenciada | não transporta mídia |
+| `45.140.192.237` | controlador DNS standby | release gerenciada | sem tráfego normal |
+| `143.14.168.168` | edge/ready | release gerenciada | participa do pool DNS-only |
+| `143.14.168.170` | edge/ready | release gerenciada | participa do pool DNS-only |
+| `143.14.168.78` | edge/ready | release gerenciada | participa do pool DNS-only |
 
-O SQLite está íntegro e a matriz DNS local ainda lista as edges. Não fazer
-alteração de produção até existir controlador, fencing e teste de failover.
+O SQLite está íntegro e o controlador DNS já reconcilia o pool das edges. Não
+confundir a capacidade declarada com medição independente: o coletor contínuo,
+alertas, medição contratual/iperf e fencing externo ainda são gates separados.
 As referências normativas são `STATE_REAL_2026-08-29.md`,
 `PRODUCTION_MULTI_LB_MULTI_EDGE_MULTI_XUI_RUNBOOK.md`,
 `LOAD_BALANCER_143_14_168_66_IMPLEMENTATION_PLAN.md` e

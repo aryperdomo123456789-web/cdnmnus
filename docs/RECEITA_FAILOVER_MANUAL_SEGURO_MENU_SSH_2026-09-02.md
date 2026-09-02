@@ -69,10 +69,11 @@ isolamento, mantenha `.237` em `standby` e faça apenas diagnóstico.
 
 O menu real em `cli/mago_cdn.py` já possui consulta de edges, drenagem,
 marcação `ready`, desabilitação, cadastro de edge/LB e reconciliação DNS. Ele
-agora possui a opção `Failover manual do controlador DNS` no checkout de
-desenvolvimento. A opção ainda não está instalada nas VPS auditadas: o menu
-instalado mantém o hash da release anterior. Não considere o recurso em uso
-até publicar uma nova tag, regenerar o manifesto e concluir o rollout.
+agora possui a opção `Failover manual do controlador DNS`. A versão do menu da
+tag `v0.5.0-managed-node.22` foi distribuída serialmente para `.111`, `.237`,
+`.168`, `.170` e `.78`, no caminho `/usr/local/lib/cdnmnus-node-menu.py`.
+Essa distribuição atualiza somente o menu; não reinstala runtime, Nginx,
+HAProxy ou serviços de mídia.
 
 O caminho atual de `core/db.py::request_load_balancer_promotion` serve para
 preparar uma edge como LB. O script
