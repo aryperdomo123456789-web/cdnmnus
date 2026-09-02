@@ -319,6 +319,10 @@
                   proxy_hide_header Server;
               }
               {% endfor %}
+              location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) {
+                  access_log off;
+                  return 421;
+              }
               location / {
                   return 421;
               }
@@ -384,6 +388,10 @@
                   return 503;
               }
               {% endif %}
+              location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) {
+                  access_log off;
+                  return 421;
+              }
               location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ {
                   proxy_pass http://broker_{{ external_alias_tenant_id }};
                   proxy_set_header X-CDN-Tenant {{ external_alias_tenant_id }};

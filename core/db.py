@@ -422,8 +422,13 @@ class Database:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         hostname = normalize_hostname(hostname)
         with self.transaction(immediate=True) as db:
-            if db.execute("SELECT 1 FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone() is None:
+            tenant = db.execute("SELECT canonical_host FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone()
+            if tenant is None:
                 raise ValueError("tenant não encontrado")
+            if hostname == tenant["canonical_host"]:
+                raise ValueError("o hostname canônico já está cadastrado; informe um alias distinto")
+            if db.execute("SELECT 1 FROM tenant_hosts WHERE hostname=?", (hostname,)).fetchone() is not None:
+                raise ValueError("hostname já pertence a um tenant")
             db.execute("INSERT INTO tenant_hosts(hostname,tenant_id,is_canonical) VALUES(?,?,0)",
                        (hostname, tenant_id))
             db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tenant_id,))

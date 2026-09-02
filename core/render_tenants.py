@@ -61,6 +61,12 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
     canonical = cfg["hosts"][0]
     health_host = cfg["health_host"]
     server_names = " ".join(_nginx(host) for host in cfg["hosts"])
+    admin_fail_closed = '''    # Rotas administrativas nunca chegam ao XUI.
+    location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) {
+        access_log off;
+        return 421;
+    }
+'''
     lb_upstreams = "\n\n".join(
         f"upstream lb_{tid}_{index} {{\n    server {_nginx(item['host'])}:{item['port']};\n    keepalive 32;\n}}"
         for index, item in enumerate(cfg["lb"])
@@ -190,7 +196,7 @@ server {{
     }}
 
 {lb_locations}
-    location / {{ return 421; }}
+{admin_fail_closed}    location / {{ return 421; }}
 }}
 
 server {{
@@ -286,7 +292,7 @@ server {{
 
 {lb_locations}
 
-    location = / {{
+{admin_fail_closed}    location = / {{
         default_type text/html;
         add_header Cache-Control "no-store" always;
         return 200 "<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='robots' content='noindex'><meta name='color-scheme' content='dark'><title>Mago Edge Infrastructure</title><style>body{{margin:0;background:#080d18;color:#eef4ff;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}}main{{max-width:760px;width:calc(100% - 48px);padding:48px;min-height:55vh;display:flex;flex-direction:column;justify-content:center}}h1{{font-size:clamp(36px,6vw,64px);line-height:1.05;margin:0 0 18px;letter-spacing:-.03em}}p{{color:#94a3b8;line-height:1.6}}.ok{{color:#22c55e;font-weight:600;letter-spacing:.02em}}footer{{margin-top:56px;padding-top:18px;border-top:1px solid #223047;color:#64748b;font-size:13px;letter-spacing:.02em}}</style></head><body><main><p class='ok'>● CDN ACTIVE.</p><h1>Content delivery at the edge.</h1><p>Protected edge network. Direct access is restricted by edge security policies.</p><footer>2026 @MagoPD. All rights reserved.</footer></main></body></html>";

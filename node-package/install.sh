@@ -23,6 +23,7 @@ managed_paths=(
   /etc/cdnmnus/control-plane.conf
   /usr/local/bin/mago-cdn
   /usr/local/bin/cdnmnus-verify-release
+  /usr/local/sbin/cdnmnus-ansible-become
   /usr/local/lib/cdnmnus-node-menu.py
   /usr/local/lib/cdnmnus-node
   /var/lib/cdnmnus-node/package.json
@@ -119,7 +120,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 backup_existing
 apt-get update
-apt-get install -y nginx ufw ca-certificates curl python3 socat haproxy
+apt-get install -y nginx ufw ca-certificates curl python3 socat haproxy libnginx-mod-http-headers-more-filter
 systemctl disable --now haproxy >/dev/null 2>&1 || true
 
 install -d -o root -g root -m 0755 /etc/cdnmnus /usr/local/lib/cdnmnus-node
@@ -128,6 +129,7 @@ install -d -o root -g root -m 0750 /var/lib/cdnmnus-node /var/lib/cdnmnus-edge
 install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/roles/node_menu/files/node_menu.py" /usr/local/lib/cdnmnus-node-menu.py
 install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/roles/node_menu/files/mago-cdn" /usr/local/bin/mago-cdn
 install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/files/verify_release.py" /usr/local/bin/cdnmnus-verify-release
+install -o root -g root -m 0755 "$PROJECT_ROOT/scripts/cdnmnus-ansible-become" /usr/local/sbin/cdnmnus-ansible-become
 install -o root -g root -m 0644 "$PROJECT_ROOT/panel/multi_tenant_broker.py" /usr/local/lib/cdnmnus-node/multi_tenant_broker.py
 install -o root -g root -m 0644 "$PROJECT_ROOT/panel/vod_relay.py" /usr/local/lib/cdnmnus-node/vod_relay.py
 install -o root -g root -m 0644 "$PROJECT_ROOT/panel/cdnmnus-tenant-broker@.service" /usr/local/lib/cdnmnus-node/cdnmnus-tenant-broker@.service

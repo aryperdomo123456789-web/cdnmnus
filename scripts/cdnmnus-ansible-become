@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Wrapper root-only para become do Ansible, limitado ao control plane."""
+from __future__ import annotations
+
+import ipaddress
+import os
+import sys
+from pathlib import Path
+
+
+def configured_control_plane() -> str:
+    path = Path("/etc/cdnmnus/control-plane.conf")
+    if not path.is_file():
+        raise SystemExit("control plane ausente")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("CONTROL_PLANE_HOST="):
+            return str(ipaddress.ip_address(line.split("=", 1)[1].strip()))
+    raise SystemExit("control plane não configurado")
+
+
+def source_address() -> str:
+    fields = os.environ.get("SSH_CONNECTION", "").split()
+    if len(fields) != 4:
+        raise SystemExit("become aceita somente sessão SSH identificada")
+    return str(ipaddress.ip_address(fields[0]))
+
+
+def command_args(args: list[str]) -> list[str]:
+    # O Ansible envia opções do sudo seguidas pelo comando remoto.
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item in {"-u", "-g", "-p"}:
+            index += 2
+        elif item.startswith("-"):
+            index += 1
+        else:
+            return args[index:]
+    raise SystemExit("comando become ausente")
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        raise SystemExit("helper precisa ser executado pelo sudo")
+    if source_address() != configured_control_plane():
+        raise SystemExit("origem SSH não é o control plane autorizado")
+    command = command_args(sys.argv[1:])
+    if command[0] in {"sudo", "su", "ssh"}:
+        raise SystemExit("encadeamento de privilégio recusado")
+    os.execvp(command[0], command)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

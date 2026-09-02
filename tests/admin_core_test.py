@@ -44,6 +44,8 @@ with tempfile.TemporaryDirectory() as root:
     assert "location ^~ /__cdnmnus_xui1_lb_0/" in output.content
     assert "location = /get.php" in output.content
     assert "location = /player_api.php" in output.content
+    assert "location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)" in output.content
+    assert "more_clear_headers" not in output.content
     assert "sub_filter 'origin1.test' 'xui1.cdn.test';" in output.content
     assert "sub_filter 'http://origin1.test:80' 'http://xui1.cdn.test';" in output.content
     assert output.content == render_tenant(db.tenant("xui1")).content
@@ -155,7 +157,7 @@ with tempfile.TemporaryDirectory() as root:
     try:
         db.add_cname("xui2", "cliente.test")
         raise AssertionError("hostname duplicado aceito")
-    except sqlite3.IntegrityError:
+    except ValueError:
         pass
 
 print("admin db/render/release checks: OK")

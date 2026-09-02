@@ -157,6 +157,8 @@ def bootstrap_edge(host: str, port: int, initial_user: str, password: str,
         temp_known.write_text(_known_hosts_line(identity), encoding="utf-8")
         os.chmod(temp_known, 0o600)
         quoted_key = shlex.quote(public)
+        helper = (Path(__file__).resolve().parents[1] / "scripts" / "cdnmnus-ansible-become").read_text(encoding="utf-8")
+        quoted_helper = shlex.quote(helper)
         script = (
             "set -eu; "
             "id cdn-deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/bash cdn-deploy; "
@@ -164,7 +166,10 @@ def bootstrap_edge(host: str, port: int, initial_user: str, password: str,
             f"printf '%s\\n' {quoted_key} > /home/cdn-deploy/.ssh/authorized_keys; "
             "chown cdn-deploy:cdn-deploy /home/cdn-deploy/.ssh/authorized_keys; "
             "chmod 600 /home/cdn-deploy/.ssh/authorized_keys; "
-            "printf 'cdn-deploy ALL=(root) NOPASSWD: ALL\\n' > /etc/sudoers.d/cdn-deploy; "
+            f"printf '%s\\n' {quoted_helper} > /usr/local/sbin/cdnmnus-ansible-become; "
+            "chown root:root /usr/local/sbin/cdnmnus-ansible-become; "
+            "chmod 755 /usr/local/sbin/cdnmnus-ansible-become; "
+            "printf 'cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-ansible-become *\\n' > /etc/sudoers.d/cdn-deploy; "
             "chmod 440 /etc/sudoers.d/cdn-deploy; visudo -cf /etc/sudoers.d/cdn-deploy >/dev/null; "
             "echo CDNMNUS_BOOTSTRAP_OK"
         )

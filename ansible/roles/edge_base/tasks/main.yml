@@ -8,6 +8,7 @@
       - curl
       - python3
       - socat
+      - libnginx-mod-http-headers-more-filter
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -20,6 +21,17 @@
       cdn-deploy soft nofile 65536
       cdn-deploy hard nofile 65536
     dest: /etc/security/limits.d/90-cdnmnus.conf
+    owner: root
+    group: root
+  mode: '0644'
+
+- name: Aplicar remoção global de fingerprint HTTP
+  ansible.builtin.copy:
+    content: |
+      # Requer libnginx-mod-http-headers-more-filter instalada pelo role.
+      server_tokens off;
+      more_clear_headers Server;
+    dest: /etc/nginx/conf.d/00-cdnmnus-security.conf
     owner: root
     group: root
     mode: '0644'

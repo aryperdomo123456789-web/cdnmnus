@@ -42,4 +42,6 @@ with tempfile.TemporaryDirectory() as root:
         pass
 
 mod.subprocess.run = real_run
+assert "NOPASSWD: ALL" not in (Path(mod.__file__).read_text())
+assert (Path(mod.__file__).parents[1] / "scripts/cdnmnus-ansible-become").is_file()
 print("edge bootstrap fingerprint/password checks: OK")

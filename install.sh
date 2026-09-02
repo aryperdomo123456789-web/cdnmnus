@@ -307,7 +307,7 @@ fetch_asset() {
 prepare_assets() {
   local local_ok=0
   if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/scripts/sysctl_tuning.sh" && -f "$SCRIPT_DIR/scripts/firewall_hardening.sh" && -f "$SCRIPT_DIR/nginx/nginx.conf" ]] \
-     && { (( WITH_PANEL == 0 )) || [[ -f "$SCRIPT_DIR/panel/panel.py" && -f "$SCRIPT_DIR/panel/token_broker.py" && -f "$SCRIPT_DIR/scripts/sanitized_monitor.py" && -f "$SCRIPT_DIR/scripts/edge_health_controller.py" && -f "$SCRIPT_DIR/scripts/soak_test.py" && -f "$SCRIPT_DIR/scripts/media_validation.py" && -f "$SCRIPT_DIR/panel/cdnmnus-panel.service" && -f "$SCRIPT_DIR/panel/cdnmnus-token-broker.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.service" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-soak@.service" ]]; }; then
+     && { (( WITH_PANEL == 0 )) || [[ -f "$SCRIPT_DIR/panel/panel.py" && -f "$SCRIPT_DIR/panel/token_broker.py" && -f "$SCRIPT_DIR/scripts/sanitized_monitor.py" && -f "$SCRIPT_DIR/scripts/cdnmnus-ansible-become" && -f "$SCRIPT_DIR/scripts/edge_health_controller.py" && -f "$SCRIPT_DIR/scripts/soak_test.py" && -f "$SCRIPT_DIR/scripts/media_validation.py" && -f "$SCRIPT_DIR/panel/cdnmnus-panel.service" && -f "$SCRIPT_DIR/panel/cdnmnus-token-broker.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.service" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-soak@.service" ]]; }; then
     local_ok=1
   fi
 
@@ -334,11 +334,12 @@ prepare_assets() {
     fetch_asset "$raw_base/panel/cdnmnus-edge-health.timer" "$TMP_DIR/panel/cdnmnus-edge-health.timer"
     fetch_asset "$raw_base/panel/cdnmnus-soak@.service" "$TMP_DIR/panel/cdnmnus-soak@.service"
     fetch_asset "$raw_base/scripts/sanitized_monitor.py" "$TMP_DIR/scripts/sanitized_monitor.py"
+    fetch_asset "$raw_base/scripts/cdnmnus-ansible-become" "$TMP_DIR/scripts/cdnmnus-ansible-become"
     fetch_asset "$raw_base/scripts/edge_health_controller.py" "$TMP_DIR/scripts/edge_health_controller.py"
     fetch_asset "$raw_base/scripts/soak_test.py" "$TMP_DIR/scripts/soak_test.py"
     fetch_asset "$raw_base/scripts/media_validation.py" "$TMP_DIR/scripts/media_validation.py"
   fi
-  chmod 0755 "$TMP_DIR/scripts/sysctl_tuning.sh" "$TMP_DIR/scripts/firewall_hardening.sh"
+  chmod 0755 "$TMP_DIR/scripts/sysctl_tuning.sh" "$TMP_DIR/scripts/firewall_hardening.sh" "$TMP_DIR/scripts/cdnmnus-ansible-become"
   ASSET_DIR="$TMP_DIR"
 }
 
@@ -347,7 +348,7 @@ install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "Instalando apenas os pacotes nativos necessários: nginx e ufw."
   apt-get update -y
-  apt-get install -y --no-install-recommends nginx ufw ca-certificates
+  apt-get install -y --no-install-recommends nginx ufw ca-certificates libnginx-mod-http-headers-more-filter
 }
 
 render_nginx_config() {

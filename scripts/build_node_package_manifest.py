@@ -15,6 +15,7 @@ FILES = (
     "ansible/roles/node_menu/files/node_menu.py",
     "ansible/roles/node_menu/files/mago-cdn",
     "ansible/files/verify_release.py",
+    "scripts/cdnmnus-ansible-become",
     "panel/multi_tenant_broker.py",
     "panel/vod_relay.py",
     "panel/cdnmnus-tenant-broker@.service",
