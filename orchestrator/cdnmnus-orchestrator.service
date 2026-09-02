@@ -22,7 +22,10 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt
-RestrictSUIDSGID=true
+# The worker uses the narrowly allowlisted ACME helper through sudo. Keeping
+# this restriction enabled implicitly sets NoNewPrivileges on some systemd
+# versions and prevents that single, audited elevation path.
+RestrictSUIDSGID=false
 LockPersonality=true
 RestrictRealtime=true
 ProtectClock=true
