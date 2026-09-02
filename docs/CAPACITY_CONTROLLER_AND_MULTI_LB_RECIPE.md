@@ -14,9 +14,9 @@ continuam sendo trabalho de implementação e validação.
 ## 1. Regra simples
 
 1. O cliente usa somente `cdn.phpd77.com`.
-2. Esse nome aponta para **um LB ativo** (preferencialmente IP flutuante).
+2. Esse nome aponta para **o LB ativo `.111`** (preferencialmente IP flutuante).
 3. O LB ativo distribui para edges saudáveis.
-4. O LB standby não recebe tráfego e mantém a mesma configuração assinada.
+4. O LB standby `.237` não recebe tráfego e mantém a mesma configuração assinada.
 5. Um controlador no control-plane decide; nenhum menu promove diretamente.
 6. Toda decisão é registrada, bloqueada por lock/fencing, testada e reversível.
 
@@ -27,8 +27,8 @@ servidor está vivo e não remove sessões de uma edge saturada.
 
 | nó | função/estado | release | observação |
 |---|---|---|---|
-| `45.140.192.237` | LB lógico/standby | release antiga de laboratório | edge table disabled; sem capacidade, health, lease ou fencing |
-| `143.14.168.111` | LB candidate | não ativo | preparar como standby depois de retirar qualquer função EDGE |
+| `143.14.168.111` | control plane + LB candidate | não ativo | preparar como LB principal, sem colocá-lo no pool de edges |
+| `45.140.192.237` | LB lógico/standby | release antiga de laboratório | preparar como standby remoto, sem tráfego |
 | `143.14.168.168` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
 | `143.14.168.170` | edge/ready | `20260829012407-d60cfdbf` | VOD validado |
 
@@ -263,7 +263,8 @@ um único LB ativo e failover/rollback reproduzíveis.
 7. Implementar provider adapter de VIP; só então Cloudflare DNS como fallback.
 8. Implementar lease/quorum/fencing e simular partição, queda e retorno.
 9. Executar carga 1→10 Gbps em laboratório e registrar relatório.
-10. Promover `.237` somente após todos os gates e atualizar os runbooks.
+10. Promover `.111` somente após todos os gates e manter `.237` como standby;
+    atualizar os runbooks antes de publicar DNS/VIP.
 
 ## 10. Rollback e critérios de parada
 

@@ -205,6 +205,21 @@
         daemon_reload: true
       when: candidate_units.changed
 
+    - name: Instalar unit do gateway de descoberta CNAME
+      ansible.builtin.copy:
+        src: "/opt/cdnmnus/current/runtime/cdnmnus-cname-gateway.service"
+        dest: /etc/systemd/system/cdnmnus-cname-gateway.service
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      register: cname_gateway_unit
+
+    - name: Recarregar systemd após instalar o gateway CNAME
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: cname_gateway_unit.changed
+
     - name: Criar diretórios de cache por tenant
       ansible.builtin.file:
         path: "/var/cache/nginx/cdnmnus/{{ item }}"
@@ -408,6 +423,43 @@
         group: root
         mode: '0644'
       register: nginx_fail_closed
+      when: not (automatic_cname_discovery | default(false) | bool)
+
+    - name: Instalar gateway padrão de descoberta CNAME
+      ansible.builtin.copy:
+        content: |
+          upstream cname_gateway {
+              server unix:/run/cdnmnus/cname-gateway.sock;
+              keepalive 32;
+          }
+          server {
+              listen 80 default_server;
+              server_name _;
+              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; }
+              location = /player_api.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; }
+              location ~ ^/(?:hls|live|movie|series)/ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; proxy_buffering off; }
+              location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
+              location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) { access_log off; return 421; }
+              location / { return 421; }
+          }
+          server {
+              listen 443 ssl default_server;
+              server_name _;
+              ssl_certificate /etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem;
+              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; }
+              location = /player_api.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; }
+              location ~ ^/(?:hls|live|movie|series)/ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; proxy_buffering off; }
+              location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
+              location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) { access_log off; return 421; }
+              location / { return 421; }
+          }
+        dest: /etc/nginx/conf.d/97-cdnmnus-default.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: nginx_cname_gateway
+      when: automatic_cname_discovery | default(false) | bool
 
     - name: Instalar include do runtime multi-tenant
       ansible.builtin.copy:
@@ -425,6 +477,21 @@
         enabled: true
         state: started
       loop: "{{ tenant_ids }}"
+
+    - name: Reiniciar gateway de descoberta CNAME para carregar a release ativa
+      ansible.builtin.systemd_service:
+        name: cdnmnus-cname-gateway.service
+        enabled: true
+        state: restarted
+      when: automatic_cname_discovery | default(false) | bool
+
+    - name: Desabilitar gateway quando a descoberta estiver desligada
+      ansible.builtin.systemd_service:
+        name: cdnmnus-cname-gateway.service
+        enabled: false
+        state: stopped
+      when: not (automatic_cname_discovery | default(false) | bool)
+      failed_when: false
 
     - name: Habilitar relays VOD dos tenants
       ansible.builtin.systemd_service:
@@ -461,6 +528,7 @@
         state: reloaded
       when: active_release_link.changed or tenant_nginx_include.changed
             or nginx_default_removed.changed or nginx_fail_closed.changed
+            or nginx_cname_gateway.changed | default(false)
 
     - name: Validar health local por tenant
       ansible.builtin.uri:
@@ -515,6 +583,23 @@
     - name: Recarregar systemd após restaurar units
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    - name: Parar gateway da candidata durante rollback
+      ansible.builtin.systemd_service:
+        name: cdnmnus-cname-gateway.service
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Reativar gateway se a release restaurada o exigir
+      ansible.builtin.systemd_service:
+        name: cdnmnus-cname-gateway.service
+        enabled: true
+        state: started
+      when: >-
+        previous_release_valid | bool and
+        ((previous_snapshot.content | b64decode | from_json).automatic_cname_discovery | default(false) | bool)
+      failed_when: false
 
     - name: Parar brokers da release candidata antes do rollback
       ansible.builtin.systemd_service:

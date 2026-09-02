@@ -8,8 +8,12 @@
     - runtime/token_broker.py
     - runtime/multi_tenant_broker.py
     - runtime/vod_relay.py
+    - runtime/cname_gateway.py
+    - runtime/cname_discovery.py
+    - runtime/m3u_transform.py
     - runtime/cdnmnus-tenant-broker@.service
     - runtime/cdnmnus-vod-relay@.service
+    - runtime/cdnmnus-cname-gateway.service
   register: candidate_runtime_artifacts
 
 - name: Impedir ativação de runtime incompleto

@@ -30,8 +30,8 @@ Legenda: `[x]` já existe no código, `[~]` existe parcialmente/laboratório,
           Conta Cloudflare A            Conta Cloudflare B
           DNS-only (cinza)               R2 privado + lock
                     |                         |
-             .237 ACTIVE LB             objetos criptografados
-             .111 STANDBY LB            + restore comprovado
+       .111 ACTIVE LB + CONTROL PLANE   objetos criptografados
+             .237 STANDBY LB             + restore comprovado
                     |
               .168/.170 EDGES
 ```

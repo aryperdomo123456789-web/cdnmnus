@@ -118,6 +118,10 @@ real, incluindo `Range` VOD e sanitização de credenciais.
 Para descoberta segura de aliases ainda nao cadastrados, siga também
 [RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md](RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md).
 
+Para a execução completa, incluindo o gateway interno, o rollout canário e a
+matriz real de aceite de `on.acxxl.com` e `cnxt.vr766.com`, siga também
+[RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY_EXECUTION_2026-09-02.md](RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY_EXECUTION_2026-09-02.md).
+
 O laboratório oficial fica em:
 
 - [lab-player/README.md](/opt/cdnmnus/lab-player/README.md)
@@ -134,10 +138,11 @@ Ele serve para:
 
 ## 5. O que está bloqueado
 
-Até a `.168` passar pelo canário real e os locks/fencing estarem validados, não
-deve ser tratado como pronto:
+Até o LB principal `.111`, o standby `.237` e os locks/fencing passarem pelos
+gates reais, não deve ser tratado como pronto:
 
-- `.237` ACTIVE;
+- `.111` ACTIVE sem lease/fencing comprovados;
+- `.237` ACTIVE ou recebendo tráfego fora de um failover controlado;
 - promoção edge -> LB em produção;
 - Cloudflare write de produção;
 - backup R2 de produção sem restore comprovado;
@@ -157,6 +162,9 @@ Depois que esta base estiver estável, o próximo documento útil é um
 
 Para a evolução de capacidade, pesos, onboarding automático e failover entre
 LBs, use agora [CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md).
+
+Para implementar de forma guiada os cinco bloqueios atuais do LB, use a
+[receita das cinco frentes para 10/10](RECEITA_5_FRENTES_LB_10_DE_10_2026-09-02.md).
 
 Para certificados que cubrem novos subdomínios, transformação de playlists
 legadas em `/play/<token>/m3u8`, isolamento multi-XUI e abertura rápida com o

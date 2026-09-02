@@ -110,7 +110,11 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
         raise ValueError("nenhum tenant habilitado")
     generation = max(int(item["config_version"]) for item in tenants)
     rendered = render_all(tenants)
-    snapshot = broker_snapshot(tenants, generation)
+    snapshot = broker_snapshot(
+        tenants,
+        generation,
+        automatic_cname_discovery=bool(db.setting("automatic_cname_discovery", False)),
+    )
     release_id = time.strftime("%Y%m%d%H%M%S", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
     root = Path(release_root)
     root.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -139,8 +143,12 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
             "runtime/token_broker.py": project_root / "panel/token_broker.py",
             "runtime/multi_tenant_broker.py": project_root / "panel/multi_tenant_broker.py",
             "runtime/vod_relay.py": project_root / "panel/vod_relay.py",
+            "runtime/cname_gateway.py": project_root / "panel/cname_gateway.py",
+            "runtime/cname_discovery.py": project_root / "core/cname_discovery.py",
+            "runtime/m3u_transform.py": project_root / "core/m3u_transform.py",
             "runtime/cdnmnus-tenant-broker@.service": project_root / "panel/cdnmnus-tenant-broker@.service",
             "runtime/cdnmnus-vod-relay@.service": project_root / "panel/cdnmnus-vod-relay@.service",
+            "runtime/cdnmnus-cname-gateway.service": project_root / "panel/cdnmnus-cname-gateway.service",
         }
         for relative, source in runtime_sources.items():
             if not source.is_file():
@@ -274,7 +282,11 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
     if not tenants:
         raise ValueError("nenhum tenant habilitado para ativação da edge")
     contexts = tenant_deployment_contexts(tenants)
-    alias = _external_alias_context(db, contexts)
+    automatic_discovery = bool(db.setting("automatic_cname_discovery", False))
+    # Com descoberta ativa, não existe alias global: cada Host é resolvido no
+    # gateway para o canonical terminal. O primeiro tenant só fornece o
+    # certificado default do vhost TLS; não recebe tráfego por fallback.
+    alias = contexts[0] if automatic_discovery else _external_alias_context(db, contexts)
     control_plane_host = resolve_control_plane_host()
     command = ["ansible-playbook", "-i", str(inventory), str(playbook),
                "--extra-vars", json.dumps({
@@ -288,6 +300,7 @@ def run_deployment(db: Database, deployment: dict[str, Any], inventory: str | Pa
                    "external_alias_origin_port": alias["origin"]["port"],
                    "external_alias_load_balancers": alias["load_balancers"],
                    "external_alias_has_vod": bool(alias["vod"]),
+                   "automatic_cname_discovery": automatic_discovery,
                    "tenant_ids": [item["tenant_id"] for item in contexts],
                    "vod_tenant_ids": [item["tenant_id"] for item in contexts if item["vod"]],
                    "tenant_health_hosts": [{"host": item["health_host"]} for item in contexts],

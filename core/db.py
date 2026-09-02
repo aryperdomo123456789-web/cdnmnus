@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 from contextlib import closing, contextmanager
@@ -256,6 +257,17 @@ class Database:
                     operator TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS cname_discovery_cache (
+                    alias_host TEXT PRIMARY KEY,
+                    canonical_host TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL REFERENCES xui_tenants(id) ON DELETE CASCADE,
+                    observed_chain_json TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('valid','rejected','expired')),
+                    last_error TEXT,
+                    decision_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS node_id_sequence (
                     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                     next_id INTEGER NOT NULL CHECK(next_id > 0)
@@ -305,6 +317,9 @@ class Database:
             tls_job_columns = {row[1] for row in db.execute("PRAGMA table_info(tls_jobs)").fetchall()}
             if "lease_id" not in tls_job_columns:
                 db.execute("ALTER TABLE tls_jobs ADD COLUMN lease_id TEXT")
+            discovery_columns = {row[1] for row in db.execute("PRAGMA table_info(cname_discovery_cache)").fetchall()}
+            if discovery_columns and "updated_at" not in discovery_columns:
+                db.execute("ALTER TABLE cname_discovery_cache ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
         try:
             os.chmod(self.path, 0o600)
         except PermissionError:
@@ -421,6 +436,8 @@ class Database:
     def add_cname(self, tenant_id: str, hostname: str) -> dict[str, Any]:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         hostname = normalize_hostname(hostname)
+        if hostname.startswith("__cdnmnus_"):
+            raise ValueError("hostname reservado para uso interno")
         with self.transaction(immediate=True) as db:
             tenant = db.execute("SELECT canonical_host FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone()
             if tenant is None:
@@ -468,6 +485,53 @@ class Database:
                  safe_reason, json.dumps(_sanitized_event_payload(evidence or {}), sort_keys=True)),
             )
         return self.tenant(tenant_id)
+
+    def upsert_cname_discovery_cache(self, alias_host: str, canonical_host: str, tenant_id: str,
+                                     observed_chain_json: str, expires_at: float, state: str,
+                                     decision_id: str, last_error: str | None = None) -> None:
+        alias_host = normalize_hostname(alias_host)
+        canonical_host = normalize_hostname(canonical_host)
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        if state not in {"valid", "rejected", "expired"}:
+            raise ValueError("estado de descoberta inválido")
+        if not decision_id.strip():
+            raise ValueError("decision_id obrigatório")
+        try:
+            json.loads(observed_chain_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("observed_chain_json inválido") from exc
+        with self.transaction(immediate=True) as db:
+            if db.execute("SELECT 1 FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone() is None:
+                raise ValueError("tenant não encontrado")
+            db.execute(
+                """INSERT INTO cname_discovery_cache
+                   (alias_host,canonical_host,tenant_id,observed_chain_json,expires_at,state,last_error,decision_id,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(alias_host) DO UPDATE SET
+                       canonical_host=excluded.canonical_host,
+                       tenant_id=excluded.tenant_id,
+                       observed_chain_json=excluded.observed_chain_json,
+                       expires_at=excluded.expires_at,
+                       state=excluded.state,
+                       last_error=excluded.last_error,
+                       decision_id=excluded.decision_id,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (alias_host, canonical_host, tenant_id, observed_chain_json, float(expires_at),
+                 state, _sanitize_tls_error(last_error) if last_error else None, decision_id),
+            )
+
+    def cname_discovery_cache(self, alias_host: str) -> dict[str, Any] | None:
+        alias_host = normalize_hostname(alias_host)
+        rows = self.rows("SELECT * FROM cname_discovery_cache WHERE alias_host=?", (alias_host,))
+        return rows[0] if rows else None
+
+    def expire_cname_discovery_cache(self, now: float | None = None) -> int:
+        cutoff = time.time() if now is None else float(now)
+        with self.transaction(immediate=True) as db:
+            return db.execute(
+                "UPDATE cname_discovery_cache SET state='expired', updated_at=CURRENT_TIMESTAMP WHERE expires_at <= ? AND state='valid'",
+                (cutoff,),
+            ).rowcount
 
     def record_tls_event(self, tenant_id: str, event_type: str, *, operator: str,
                          reason: str, payload: dict[str, Any] | None = None) -> None:

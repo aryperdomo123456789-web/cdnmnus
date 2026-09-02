@@ -259,9 +259,10 @@ inicia HAProxy nem publica tráfego.
 - A política de UFW foi amarrada ao fluxo de ativação e ao instalador para
   preservar `22/80/443` públicos em todos os nós. A exceção `1455/tcp` é específica
   da `.111` e não faz parte do baseline genérico.
-- O `.237` é o alvo primário informado para LB, mas hoje continua `standby`
-  operacional: release, capacidade, health, lease e fencing ainda precisam ser
-  comprovados. O `.111` continua `candidate` até ser preparado como standby.
+- O `.111` é o control plane atual e o LB ACTIVE planejado; o `.237` é o LB
+  remoto standby. Release, capacidade, health, lease e fencing ainda precisam
+  ser comprovados antes da publicação. O `.111` continua `candidate` até ser
+  preparado como LB ACTIVE.
 - `panel/` ainda existe como superfície de broker/relay e precisa ser entendido
   como contrato de runtime, não como fonte única de verdade para operação.
 - O relay Python passou a validação funcional real e carga curta, mas os gates

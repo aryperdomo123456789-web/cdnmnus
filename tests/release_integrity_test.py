@@ -44,6 +44,8 @@ with tempfile.TemporaryDirectory() as temp_name:
     assert (release_path / "runtime/vod_relay.py").is_file()
     assert "runtime/vod_relay.py" in first["files"]
     assert (release_path / "runtime/cdnmnus-vod-relay@.service").is_file()
+    assert (release_path / "runtime/cname_gateway.py").is_file()
+    assert (release_path / "runtime/cdnmnus-cname-gateway.service").is_file()
     for unit_name in (
         "cdnmnus-tenant-broker@.service",
         "cdnmnus-vod-relay@.service",

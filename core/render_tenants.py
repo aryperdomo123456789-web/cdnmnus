@@ -324,8 +324,14 @@ def render_all(tenants: Iterable[dict[str, Any]]) -> dict[str, RenderedTenant]:
     return rendered
 
 
-def broker_snapshot(tenants: Iterable[dict[str, Any]], generation: int) -> str:
-    result: dict[str, Any] = {"schema_version": 1, "generation": int(generation), "tenants": {}}
+def broker_snapshot(tenants: Iterable[dict[str, Any]], generation: int,
+                    *, automatic_cname_discovery: bool = False) -> str:
+    result: dict[str, Any] = {
+        "schema_version": 1,
+        "generation": int(generation),
+        "automatic_cname_discovery": bool(automatic_cname_discovery),
+        "tenants": {},
+    }
     for tenant in sorted(tenants, key=lambda item: str(item["id"])):
         cfg = _normalized(tenant)
         result["tenants"][cfg["id"]] = {

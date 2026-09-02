@@ -9,7 +9,8 @@ deve ser lido junto com
 [RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md).
 
 **Data-base:** 01/09/2026
-**Topologia alvo:** `.237` LB ativo, `.111` LB standby, `.168/.170` edges.
+**Topologia alvo:** `.111` control plane + LB ativo, `.237` LB standby,
+`.168/.170/.78` edges.
 **Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
 **Regra:** preservar o tráfego atual até o substituto passar por health,
 reprodução, rollback e soak.
@@ -35,13 +36,13 @@ Quando documentos históricos divergirem, use esta ordem:
 
 ### Produção viva
 
-- [x] serviços principais ativos e `nginx -t` aprovado na `.111`;
+- [x] control plane ativo e `nginx -t` aprovado na `.111`;
 - [x] health `200` e TLS válido nas três edges;
 - [x] `.168/.170` na release `20260829012407-d60cfdbf`, digest
   `9e5457a1dd27609a573c0fd7cbcc80db1d84378da118d7e0dc70d70d7a534eb0`;
 - [~] `.111` ainda no runtime VOD legado, sem release ativa por symlink;
 - [x] novo relay VOD instalado e ativo no systemd de `.168/.170`;
-- [ ] HAProxy, PostgreSQL, lease ou fencing instalados;
+- [ ] HAProxy frontal ativo na `.111`, PostgreSQL autoritativo, lease ou fencing instalados;
 - [~] `.237` possui papel lógico LB/standby, mas ainda usa release antiga e não
   possui capacidade, health, lease ou fencing de produção.
 
@@ -79,8 +80,8 @@ registro operacional, backends, release e gates de produção.
   `node_events` já existem em `core/topology.py`;
 - role Ansible `load_balancer` e playbooks de preflight/deploy/promoção/
   rebaixamento/rollback já existem;
-- HAProxy frontal possui template e testes, mas o `.237` ainda não está
-  convergido para a release atual;
+- HAProxy frontal possui template e testes, mas o `.111` ainda não está
+  convergido como LB ACTIVE e o `.237` ainda não está preparado como standby;
 - PostgreSQL, controlador contínuo de health/capacidade, quorum e fencing
   externo continuam pendentes;
 - `ansible-playbook` continua dependente da instalação no control node.
@@ -94,8 +95,8 @@ DNS/floating IP com health e fencing
    |
    +--------------------+
    |                    |
-LB .237 ACTIVE     LB .111 STANDBY
-HAProxy sem cache  HAProxy sem cache
+       LB .111 ACTIVE + CONTROL PLANE       LB .237 STANDBY
+             HAProxy sem cache              HAProxy sem cache
    |                    |
    +---------+----------+
              |
@@ -186,6 +187,7 @@ git diff --check
 Preflight limitado:
 
 ```bash
+ANSIBLE_CONFIG=/opt/cdnmnus/ansible/ansible.cfg \
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/playbooks/preflight-edge.yml --limit edge1
 ```
@@ -224,7 +226,7 @@ servindo.
 `20260829012407-d60cfdbf`, com o mesmo digest de sete artefatos, broker/relay
 ativos, `nginx -t`, health, live e VOD Range aprovados. Os estados foram
 corrigidos por transição auditada. Permanecem os gates prolongados do passo 1;
-esta convergência não autoriza sozinha a virada para o `.237`.
+esta convergência não autoriza sozinha a publicação do LB `.111`.
 
 ### Contrato obrigatório para toda edge futura
 
@@ -314,11 +316,20 @@ ansible/roles/load_balancer/defaults/main.yml
 ansible/roles/load_balancer/tasks/main.yml
 ansible/roles/load_balancer/handlers/main.yml
 ansible/roles/load_balancer/templates/haproxy.cfg.j2
-ansible/playbooks/preflight-load-balancer.yml
-ansible/playbooks/deploy-load-balancer.yml
-ansible/playbooks/promote-load-balancer.yml
-ansible/playbooks/demote-load-balancer.yml
+ansible/playbooks/load-balancer.yml
 ```
+
+O playbook único recebe a operação em `load_balancer_action`:
+
+```bash
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/load-balancer.yml \
+  -e load_balancer_action=preflight
+```
+
+Use `deploy`, `promote`, `drain`, `demote` ou `rollback` somente depois dos
+gates correspondentes e sempre com `--limit` para um LB por vez. As ações de
+estado também exigem confirmação, lease e fencing quando aplicável.
 
 Requisitos: pacote pinado, `serial: 1`, backup, `haproxy -c`, reload gracioso,
 health, firewall, logs sanitizados e rollback. A role nunca altera DNS.
@@ -380,27 +391,27 @@ Testar partição de rede, processo travado, dois operadores, lease expirando,
 API de fencing falhando e retorno do antigo ACTIVE. Em nenhum cenário podem
 existir dois ACTIVE com fencing token válido.
 
-### Passo 10 — Preparar `.237` sem DNS
+### Passo 10 — Preparar `.111` como LB ACTIVE sem DNS
 
-1. validar Ubuntu, console, capacidade, NTP e firewall;
-2. conferir fingerprint fora da conexão;
-3. cadastrar node `load_balancer/pending`;
-4. fazer bootstrap por chave exclusiva e descartar senha;
-5. executar preflight;
-6. instalar role LB;
-7. distribuir TLS via secret store/DNS-01;
-8. configurar `.168/.170` como backends;
-9. manter estado `candidate`.
+1. preservar o control plane atual e testar console/rollback;
+2. preparar HAProxy local sem remover os serviços do control plane;
+3. executar preflight de capacidade, NTP, storage e portas;
+4. instalar HAProxy sem publicar DNS;
+5. distribuir TLS via secret store/DNS-01;
+6. configurar `.168`, `.170` e `.78` como backends;
+7. validar `haproxy -c`, `/lb-health`, health das edges e mídia;
+8. manter o endpoint público atual até o canário ser aprovado;
+9. registrar `.111` como candidato a ACTIVE.
 
-Aceite: `haproxy -c`, health das duas edges, portas administrativas privadas e
-nenhum A/AAAA público apontando para `.237`.
+Aceite: `haproxy -c`, health das três edges, portas administrativas privadas e
+nenhum A/AAAA público apontando diretamente para a origem.
 
-### Passo 11 — Testar `.237 -> .168/.170`
+### Passo 11 — Testar `.111 -> .168/.170/.78`
 
 Health sem alterar DNS:
 
 ```bash
-curl --fail --resolve cdn.phpd77.com:443:45.140.192.237 \
+curl --fail --resolve cdn.phpd77.com:443:143.14.168.111 \
   https://cdn.phpd77.com/edge-health
 ```
 
@@ -416,71 +427,71 @@ Aceite:
 - [ ] failover fica dentro do SLO;
 - [ ] rollback do `.237` aprovado.
 
-### Passo 12 — Drenar `.111` como edge
+### Passo 12 — Preparar `.237` como standby sem DNS
 
-Pré-condições: `.168/.170` aprovadas e com capacidade suficiente; `.237`
-candidata aprovada; backup/rollback da `.111`; storage estabilizado.
+Pré-condições: `.168/.170/.78` aprovadas e com capacidade suficiente; `.111`
+candidata aprovada; backup/rollback do control plane; storage estabilizado.
 
-1. marcar `.111` `draining` no estado autoritativo;
-2. impedir sessões novas pelo mecanismo público atual;
-3. aguardar tráfego cair até o limite definido;
-4. confirmar sessões novas nas outras edges;
-5. registrar release, configuração e serviços da `.111`;
-6. parar somente serviços EDGE após drain.
+1. validar SSH pinado, console e pacote autorizado em `.237`;
+2. instalar a role LB em `.237` sem publicar DNS;
+3. configurar os mesmos backends `.168/.170/.78`;
+4. distribuir o mesmo TLS e validar `haproxy -c`;
+5. testar `.237` com `--resolve`, sem alterar DNS;
+6. registrar `.237` como `standby`.
 
-**PARE:** se `.168/.170` saturarem, gerarem stalls ou 5xx, restaure `.111`
-como edge e não avance.
+**PARE:** se qualquer edge saturar, gerar stalls ou 5xx, não publique o LB.
 
-### Passo 13 — Preparar `.111` como standby
+### Passo 13 — Promover `.111` como ACTIVE
 
-1. promover por operação autorizada, nunca editando JSON;
-2. instalar a mesma release LB do `.237`;
-3. configurar `.168/.170`;
-4. instalar secrets/TLS pelo canal autorizado;
-5. registrar `standby` sem lease ACTIVE;
-6. garantir que broker, relay e cache EDGE não estejam ativos.
+1. adquirir lease exclusiva e fencing token;
+2. confirmar que `.237` está parado/standby e sem lease;
+3. promover `.111` pela operação autorizada;
+4. publicar o VIP/DNS somente depois do fencing;
+5. observar health, 5xx, latência e playback;
+6. manter o control plane protegido e fora do pool de edges.
 
-Aceite: mesmo release digest do `.237`, health dos backends, nenhum endpoint
-público e reversão para EDGE já testada em homologação.
+Aceite: release/digest aprovados, health dos backends, endpoint público único e
+reversão para `.237` já testada em homologação.
 
-### Passo 14 — Ensaiar promoção e retorno
+### Passo 14 — Ensaiar failover `.111 -> .237` e retorno
 
 Testar:
 
-1. parada controlada e abrupta do `.237`;
-2. partição entre `.237` e banco;
+1. parada controlada e abrupta do `.111`;
+2. partição entre `.111` e a autoridade de lease;
 3. falha DNS/floating IP;
-4. retorno do `.237` após promoção da `.111`;
-5. rollback para `.237`;
+4. promoção da `.237` após queda da `.111`;
+5. retorno controlado para `.111`;
 6. queda de edge durante failover de LB.
 
 Registrar tempos de detecção, expiração, fencing, promoção, primeiro health,
 primeira reprodução e RTO. Aceite: nunca dois ACTIVE; antigo ativo retorna
 standby; Range/reconexão funciona; eventos e fencing token são auditáveis.
 
-### Passo 15 — Publicar `.237` ACTIVE
+### Passo 15 — Publicar `.111` ACTIVE
 
 1. congelar deployments e qualquer transformação de playlist em rollout;
 2. confirmar todos os nós e PostgreSQL;
 3. confirmar snapshot e rollback;
 4. reduzir TTL com antecedência planejada;
-5. adquirir lease no `.237`;
+5. adquirir lease na `.111`;
 6. cercar o endpoint anterior;
 7. publicar floating IP/DNS;
 8. monitorar health, 5xx, latência, banda e stalls;
 9. aumentar tráfego gradualmente.
 
-Falha de SLO: fence `.237`, restaure endpoint anterior, valide reprodução e
+Falha de SLO: fence `.111`, promova `.237`, valide reprodução e
 preserve evidências. DNS nunca é “corrigido no susto” sem fencing.
 
-### Passo 16 — Operar `.111` STANDBY
+### Passo 16 — Operar `.237` STANDBY
 
-- mesma release LB do `.237`;
+- mesma release LB da `.111`;
 - health contínuo das edges;
 - certificado e snapshot atualizados;
 - drift, relógio, disco e conectividade monitorados;
 - promoção programada testada periodicamente;
-- nenhuma lease ACTIVE na `.111`.
+- `.237` não possui lease ACTIVE própria; a lease, quando existente, pertence
+  exclusivamente ao `.111` ACTIVE.
 
 Standby não é apenas “servidor ligado”: precisa ter teste de promoção ainda
 válido e capacidade comprovada.
@@ -519,7 +530,7 @@ atual, active/standby continua recomendado.
 
 ### Load Balancers
 
-- [ ] `.237` ACTIVE e `.111` STANDBY;
+- [ ] `.111` ACTIVE + control plane e `.237` STANDBY;
 - [ ] mesma release, HAProxy sem cache;
 - [ ] health, drain, slow-start e TLS;
 - [ ] promoção e retorno ensaiados.
@@ -585,8 +596,8 @@ resultado. Nunca registrar credenciais, URIs de mídia, cookies ou redirects.
 
 ## 11. Definição de pronto
 
-Pronto significa: `.168/.170` na mesma release multi-XUI/VOD; `.237` ACTIVE por
-lease/fencing; `.111` STANDBY sem role EDGE; PostgreSQL autoritativo; promoção e
+Pronto significa: `.168/.170/.78` na mesma release multi-XUI/VOD; `.111` ACTIVE
+com control plane por lease/fencing; `.237` STANDBY sem tráfego; PostgreSQL autoritativo; promoção e
 rollback reproduzíveis; players, soak, carga e desastre aprovados; nenhum
 vazamento; capacidade dentro do SLO. Até lá, preserve o legado funcional e
 opere a migração em active/standby.

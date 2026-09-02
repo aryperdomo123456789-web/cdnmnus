@@ -1,0 +1,35 @@
+[Unit]
+Description=cdnmnus automatic CNAME tenant gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Environment=CDNMNUS_TENANTS_CONFIG=/opt/cdnmnus/current/broker/tenants.json
+Environment=CDNMNUS_CNAME_GATEWAY_SOCKET=/run/cdnmnus/cname-gateway.sock
+ExecStart=/usr/bin/python3 /opt/cdnmnus/current/runtime/cname_gateway.py
+RuntimeDirectory=cdnmnus
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/cdnmnus/current
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+TasksMax=512
+MemoryMax=768M
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

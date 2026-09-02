@@ -57,6 +57,7 @@ with tempfile.TemporaryDirectory() as root:
     rendered = render_all(db.tenants())
     assert sorted(rendered) == ["tenants/xui1.conf", "tenants/xui2.conf", "tenants/xui3.conf"]
     snapshot = json.loads(broker_snapshot(db.tenants(), 2))
+    assert snapshot["automatic_cname_discovery"] is False
     assert snapshot["tenants"]["xui1"]["origin"]["host"] == "origin1.test"
 
     with db.connect() as conn:
