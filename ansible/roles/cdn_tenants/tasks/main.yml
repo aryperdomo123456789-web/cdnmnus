@@ -223,7 +223,6 @@
     - name: Instalar servidor padrão fail-closed
       ansible.builtin.copy:
         content: |
-          server_tokens off;
           upstream external_alias_origin {
               server {{ external_alias_origin_host }}:{{ external_alias_origin_port }};
               keepalive 32;
