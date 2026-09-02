@@ -1,0 +1,16 @@
+[Unit]
+Description=cdnmnus central Edge health controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/cdnmnus
+ExecStart=/usr/bin/python3 /opt/cdnmnus/scripts/edge_health_controller.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus
+UMask=0077

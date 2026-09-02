@@ -307,7 +307,7 @@ fetch_asset() {
 prepare_assets() {
   local local_ok=0
   if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/scripts/sysctl_tuning.sh" && -f "$SCRIPT_DIR/scripts/firewall_hardening.sh" && -f "$SCRIPT_DIR/nginx/nginx.conf" ]] \
-     && { (( WITH_PANEL == 0 )) || [[ -f "$SCRIPT_DIR/panel/panel.py" && -f "$SCRIPT_DIR/panel/token_broker.py" && -f "$SCRIPT_DIR/scripts/sanitized_monitor.py" && -f "$SCRIPT_DIR/scripts/soak_test.py" && -f "$SCRIPT_DIR/scripts/media_validation.py" && -f "$SCRIPT_DIR/panel/cdnmnus-panel.service" && -f "$SCRIPT_DIR/panel/cdnmnus-token-broker.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-soak@.service" ]]; }; then
+     && { (( WITH_PANEL == 0 )) || [[ -f "$SCRIPT_DIR/panel/panel.py" && -f "$SCRIPT_DIR/panel/token_broker.py" && -f "$SCRIPT_DIR/scripts/sanitized_monitor.py" && -f "$SCRIPT_DIR/scripts/edge_health_controller.py" && -f "$SCRIPT_DIR/scripts/soak_test.py" && -f "$SCRIPT_DIR/scripts/media_validation.py" && -f "$SCRIPT_DIR/panel/cdnmnus-panel.service" && -f "$SCRIPT_DIR/panel/cdnmnus-token-broker.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.service" && -f "$SCRIPT_DIR/panel/cdnmnus-monitor.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.service" && -f "$SCRIPT_DIR/panel/cdnmnus-edge-health.timer" && -f "$SCRIPT_DIR/panel/cdnmnus-soak@.service" ]]; }; then
     local_ok=1
   fi
 
@@ -330,8 +330,11 @@ prepare_assets() {
     fetch_asset "$raw_base/panel/cdnmnus-token-broker.service" "$TMP_DIR/panel/cdnmnus-token-broker.service"
     fetch_asset "$raw_base/panel/cdnmnus-monitor.service" "$TMP_DIR/panel/cdnmnus-monitor.service"
     fetch_asset "$raw_base/panel/cdnmnus-monitor.timer" "$TMP_DIR/panel/cdnmnus-monitor.timer"
+    fetch_asset "$raw_base/panel/cdnmnus-edge-health.service" "$TMP_DIR/panel/cdnmnus-edge-health.service"
+    fetch_asset "$raw_base/panel/cdnmnus-edge-health.timer" "$TMP_DIR/panel/cdnmnus-edge-health.timer"
     fetch_asset "$raw_base/panel/cdnmnus-soak@.service" "$TMP_DIR/panel/cdnmnus-soak@.service"
     fetch_asset "$raw_base/scripts/sanitized_monitor.py" "$TMP_DIR/scripts/sanitized_monitor.py"
+    fetch_asset "$raw_base/scripts/edge_health_controller.py" "$TMP_DIR/scripts/edge_health_controller.py"
     fetch_asset "$raw_base/scripts/soak_test.py" "$TMP_DIR/scripts/soak_test.py"
     fetch_asset "$raw_base/scripts/media_validation.py" "$TMP_DIR/scripts/media_validation.py"
   fi
@@ -418,12 +421,15 @@ install_panel() {
   install -m 0755 "$ASSET_DIR/panel/panel.py" "$panel_dir/panel.py"
   install -m 0755 "$ASSET_DIR/panel/token_broker.py" "$panel_dir/token_broker.py"
   install -m 0755 "$ASSET_DIR/scripts/sanitized_monitor.py" "$panel_dir/sanitized_monitor.py"
+  install -m 0755 "$ASSET_DIR/scripts/edge_health_controller.py" "$panel_dir/edge_health_controller.py"
   install -m 0755 "$ASSET_DIR/scripts/soak_test.py" "$panel_dir/soak_test.py"
   install -m 0755 "$ASSET_DIR/scripts/media_validation.py" "$panel_dir/media_validation.py"
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-panel.service" /etc/systemd/system/cdnmnus-panel.service
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-token-broker.service" /etc/systemd/system/cdnmnus-token-broker.service
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-monitor.service" /etc/systemd/system/cdnmnus-monitor.service
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-monitor.timer" /etc/systemd/system/cdnmnus-monitor.timer
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-edge-health.service" /etc/systemd/system/cdnmnus-edge-health.service
+  install -m 0644 "$ASSET_DIR/panel/cdnmnus-edge-health.timer" /etc/systemd/system/cdnmnus-edge-health.timer
   install -m 0644 "$ASSET_DIR/panel/cdnmnus-soak@.service" /etc/systemd/system/cdnmnus-soak@.service
   umask 077
   printf 'CDNMNUS_PANEL_USER=%s\nCDNMNUS_PANEL_PASSWORD=%s\n' "$PANEL_USER" "$password" > "$env_file"
@@ -442,6 +448,7 @@ install_panel() {
   systemctl restart cdnmnus-panel.service
   systemctl enable cdnmnus-token-broker.service >/dev/null 2>&1 || true
   systemctl enable --now cdnmnus-monitor.timer
+  systemctl enable --now cdnmnus-edge-health.timer
   if [[ -f /etc/cdnmnus/token-broker.json ]]; then
     systemctl restart cdnmnus-token-broker.service
   fi

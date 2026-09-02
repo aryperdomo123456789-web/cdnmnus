@@ -178,6 +178,8 @@ class Database:
                     deployed_version TEXT,
                     last_health_at TEXT,
                     last_health_status INTEGER,
+                    health_failures INTEGER NOT NULL DEFAULT 0,
+                    health_successes INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -292,6 +294,11 @@ class Database:
             if "health_host" not in tenant_columns:
                 db.execute("ALTER TABLE xui_tenants ADD COLUMN health_host TEXT")
                 db.execute("UPDATE xui_tenants SET health_host=canonical_host WHERE health_host IS NULL")
+            edge_columns = {row[1] for row in db.execute("PRAGMA table_info(edges)").fetchall()}
+            if "health_failures" not in edge_columns:
+                db.execute("ALTER TABLE edges ADD COLUMN health_failures INTEGER NOT NULL DEFAULT 0")
+            if "health_successes" not in edge_columns:
+                db.execute("ALTER TABLE edges ADD COLUMN health_successes INTEGER NOT NULL DEFAULT 0")
             if "playlist_host" not in tenant_columns:
                 db.execute("ALTER TABLE xui_tenants ADD COLUMN playlist_host TEXT")
                 db.execute("UPDATE xui_tenants SET playlist_host=canonical_host WHERE playlist_host IS NULL")
@@ -870,6 +877,35 @@ class Database:
         if not rows:
             raise ValueError("edge não encontrada")
         return rows[0]
+
+    def record_edge_health(self, edge_id: str, status: int | None, *, healthy: bool,
+                           operator: str = "health-controller", reason: str = "health probe",
+                           fail_threshold: int = 3, recover_threshold: int = 5) -> dict[str, Any]:
+        """Persiste uma sonda e muda o pool somente após hysteresis."""
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT * FROM edges WHERE id=?", (edge_id,)).fetchone()
+            if row is None:
+                raise ValueError("edge não encontrada")
+            failures = 0 if healthy else int(row["health_failures"] or 0) + 1
+            successes = int(row["health_successes"] or 0) + 1 if healthy else 0
+            target = row["state"]
+            if row["state"] == "ready" and not healthy and failures >= fail_threshold:
+                target = "failed"
+            elif row["state"] == "failed" and healthy and successes >= recover_threshold:
+                target = "ready"
+            db.execute("""UPDATE edges SET last_health_at=CURRENT_TIMESTAMP,
+                       last_health_status=?,health_failures=?,health_successes=?,
+                       state=?,updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                       (status, failures, successes, target, edge_id))
+            if target != row["state"]:
+                db.execute("""INSERT INTO edge_events
+                    (id,edge_id,event_type,from_state,to_state,operator,reason,payload_sanitized)
+                    VALUES(?,?,?,?,?,?,?,?)""",
+                    ("evt-" + uuid.uuid4().hex, edge_id, "health_state_changed",
+                     row["state"], target, operator, reason,
+                     json.dumps({"status": status, "failures": failures,
+                                 "successes": successes}, sort_keys=True)))
+        return self.edge(edge_id)
 
     def edges(self) -> list[dict[str, Any]]:
         return self.rows("SELECT * FROM edges ORDER BY name")

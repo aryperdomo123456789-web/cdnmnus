@@ -45,7 +45,7 @@ fi
 
 git fetch --prune origin "$REF"
 git merge --ff-only "origin/$REF"
-[[ -f install.sh && -f panel/panel.py && -f panel/token_broker.py && -f scripts/sanitized_monitor.py && -f scripts/soak_test.py && -f scripts/media_validation.py && -f panel/cdnmnus-panel.service && -f panel/cdnmnus-token-broker.service && -f panel/cdnmnus-monitor.service && -f panel/cdnmnus-monitor.timer && -f panel/cdnmnus-soak@.service ]] || die 'arquivos essenciais ausentes'
+[[ -f install.sh && -f panel/panel.py && -f panel/token_broker.py && -f scripts/sanitized_monitor.py && -f scripts/edge_health_controller.py && -f scripts/soak_test.py && -f scripts/media_validation.py && -f panel/cdnmnus-panel.service && -f panel/cdnmnus-token-broker.service && -f panel/cdnmnus-monitor.service && -f panel/cdnmnus-monitor.timer && -f panel/cdnmnus-edge-health.service && -f panel/cdnmnus-edge-health.timer && -f panel/cdnmnus-soak@.service ]] || die 'arquivos essenciais ausentes'
 
 stamp="$(date +%Y%m%d%H%M%S)"
 backup="$BACKUP_ROOT/$stamp"
@@ -63,17 +63,21 @@ install -d -o www-data -g www-data -m 0750 /var/cache/nginx/cdnmnus-hls
 install -m 0755 panel/panel.py "$PANEL_DIR/panel.py"
 install -m 0755 panel/token_broker.py "$PANEL_DIR/token_broker.py"
 install -m 0755 scripts/sanitized_monitor.py "$PANEL_DIR/sanitized_monitor.py"
+install -m 0755 scripts/edge_health_controller.py "$PANEL_DIR/edge_health_controller.py"
 install -m 0755 scripts/soak_test.py "$PANEL_DIR/soak_test.py"
 install -m 0755 scripts/media_validation.py "$PANEL_DIR/media_validation.py"
 install -m 0644 panel/cdnmnus-panel.service /etc/systemd/system/cdnmnus-panel.service
 install -m 0644 panel/cdnmnus-token-broker.service /etc/systemd/system/cdnmnus-token-broker.service
 install -m 0644 panel/cdnmnus-monitor.service /etc/systemd/system/cdnmnus-monitor.service
 install -m 0644 panel/cdnmnus-monitor.timer /etc/systemd/system/cdnmnus-monitor.timer
+install -m 0644 panel/cdnmnus-edge-health.service /etc/systemd/system/cdnmnus-edge-health.service
+install -m 0644 panel/cdnmnus-edge-health.timer /etc/systemd/system/cdnmnus-edge-health.timer
 install -m 0644 panel/cdnmnus-soak@.service /etc/systemd/system/cdnmnus-soak@.service
 systemctl daemon-reload
 systemctl restart cdnmnus-panel.service
 systemctl enable cdnmnus-token-broker.service >/dev/null 2>&1 || true
 systemctl enable --now cdnmnus-monitor.timer
+systemctl enable --now cdnmnus-edge-health.timer
 [[ -f /etc/cdnmnus/token-broker.json ]] && systemctl restart cdnmnus-token-broker.service
 nginx -t
 systemctl reload nginx
