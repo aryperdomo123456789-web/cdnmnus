@@ -27,6 +27,10 @@ from core.topology import TopologyStore
 
 DB_PATH = os.environ.get("CDNMNUS_ADMIN_DB", "/var/lib/cdnmnus-admin/admin.db")
 LEGACY_PANEL = "/opt/cdnmnus-panel/panel.py"
+LOCAL_NODE_ID = Path("/etc/cdnmnus/node-id")
+LOCAL_NODE_ROLE = Path("/etc/cdnmnus/node-role.json")
+LOCAL_SSH_DIR = Path("/etc/cdnmnus/ssh")
+LAB_PLAYER_DIR = ROOT / "lab-player"
 
 
 def menu_title() -> str:
@@ -41,6 +45,111 @@ def menu_title() -> str:
 
 
 MENU_TITLE = menu_title()
+
+
+def local_node_id() -> str | None:
+    try:
+        return LOCAL_NODE_ID.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def local_node_role() -> dict[str, object]:
+    try:
+        return json.loads(LOCAL_NODE_ROLE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _shorten(text: str, limit: int = 400) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _ssh_read_only_probe(node: dict[str, object], command: str, timeout: int = 60) -> tuple[int, str, str]:
+    ssh_key = LOCAL_SSH_DIR / f"{node['id']}.ed25519"
+    ssh_user = str(node.get("ssh_user") or "cdn-deploy")
+    ssh_port = str(int(node.get("ssh_port") or 22))
+    known_hosts = LOCAL_SSH_DIR / "known_hosts"
+    argv = [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={known_hosts}",
+        "-o", f"ConnectTimeout={timeout}",
+        "-i", str(ssh_key),
+        "-p", ssh_port,
+        f"{ssh_user}@{node['ipv4']}",
+        command,
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 10, check=False)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _run_manual_failover_preflight(node: dict[str, object]) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    probe_commands = [
+        ("haproxy", "sudo -n haproxy -c -f /etc/haproxy/haproxy.cfg"),
+        ("nginx", "sudo -n nginx -t"),
+        ("services", "sudo -n systemctl is-active nginx cdnmnus-admin cdnmnus-orchestrator"),
+    ]
+    for label, command in probe_commands:
+        code, stdout, stderr = _ssh_read_only_probe(node, command)
+        ok = code == 0
+        if label == "services":
+            ok = ok and all(line.strip() == "active" for line in stdout.splitlines() if line.strip())
+        checks.append({
+            "check": label,
+            "ok": ok,
+            "command": command,
+            "stdout": _shorten(stdout, 500),
+            "stderr": _shorten(stderr, 500),
+        })
+        if not ok:
+            raise RuntimeError(f"preflight read-only falhou em {label}: {stderr or stdout or 'sem saída'}")
+    return {"checks": checks, "ok": True}
+
+
+def _run_manual_failover_lab() -> dict[str, object]:
+    xuilab_env = Path("/etc/cdnmnus/lab-player/xuilab.env")
+    run_xuilab = LAB_PLAYER_DIR / "scripts" / "run_xuilab_test.sh"
+    test_playback = LAB_PLAYER_DIR / "scripts" / "test_playback_flow.py"
+    if run_xuilab.is_file() and xuilab_env.is_file():
+        command = [str(run_xuilab)]
+    else:
+        env = {
+            "PLAYER_USERNAME": os.environ.get("PLAYER_USERNAME", ""),
+            "PLAYER_PASSWORD": os.environ.get("PLAYER_PASSWORD", ""),
+            "PLAYER_BASE_CDN": os.environ.get("PLAYER_BASE_CDN", ""),
+            "PLAYER_BASE_DIRECT": os.environ.get("PLAYER_BASE_DIRECT", ""),
+            "PLAYER_BASE_CNAME": os.environ.get("PLAYER_BASE_CNAME", ""),
+        }
+        if not env["PLAYER_USERNAME"] or not env["PLAYER_PASSWORD"]:
+            raise RuntimeError("laboratório indisponível: credenciais do player ausentes")
+        if env["PLAYER_BASE_CNAME"] and env["PLAYER_BASE_CDN"] and env["PLAYER_BASE_DIRECT"]:
+            command = [
+                sys.executable, str(test_playback),
+                "--cname",
+                "--refresh-samples",
+            ]
+        elif env["PLAYER_BASE_CDN"] and env["PLAYER_BASE_DIRECT"]:
+            command = [
+                sys.executable, str(test_playback),
+                "--both",
+                "--refresh-samples",
+            ]
+        else:
+            raise RuntimeError("laboratório indisponível: bases CDN/DIRECT/CNAME incompletas")
+    result = subprocess.run(command, capture_output=True, text=True, timeout=5400, check=False, cwd=ROOT)
+    if result.returncode != 0:
+        detail = _shorten("\n".join((result.stderr or result.stdout).splitlines()[-40:]), 2000)
+        raise RuntimeError(f"laboratório falhou: {detail}")
+    return {
+        "command": command,
+        "stdout": _shorten(result.stdout, 1000),
+    }
 
 
 def dialog(args: list[str]) -> tuple[int, str]:
@@ -474,6 +583,138 @@ def edge_action(db: Database, state: str) -> None:
                     "\n".join(f"{x['name']} A {x['content']} DNS-only" for x in records))
         except CloudflareError as exc:
             message(f"Edge {selected}: {state}. Matriz local recalculada, mas Cloudflare não foi aplicado.\n\n{exc}")
+
+
+def manual_controller_failover(db: Database) -> None:
+    topology = TopologyStore(db)
+    topology.initialize()
+    current_node = local_node_id()
+    if current_node != "1":
+        message(
+            "A operação está travada para o nó 1 neste ambiente.\n\n"
+            f"Nó local detectado: {current_node or 'indisponível'}\n"
+            "Use apenas o control plane autorizado para este failover."
+        )
+        return
+    source = topology.node("1")
+    target = topology.node("4")
+    if source["role"] != "load_balancer" or target["role"] != "load_balancer":
+        message(
+            "Topologia inconsistente para o failover manual.\n\n"
+            f"Origem: {source['id']} ({source['role']}/{source['state']})\n"
+            f"Destino: {target['id']} ({target['role']}/{target['state']})"
+        )
+        return
+    source_lb = db.rows("SELECT * FROM load_balancers WHERE node_id=?", (source["id"],))
+    target_lb = db.rows("SELECT * FROM load_balancers WHERE node_id=?", (target["id"],))
+    if (source["state"] != "active" or not source_lb or source_lb[0]["state"] != "active"):
+        message(
+            "A origem não está active no estado autoritativo. O failover foi bloqueado.\n\n"
+            f"Origem: node {source['id']} ({source['state']}/{source_lb[0]['state'] if source_lb else 'sem LB'})\n"
+            "Confirme o estado pelo control plane antes de qualquer operação."
+        )
+        return
+    if target["state"] != "standby":
+        message(
+            "O destino não está em standby e a operação foi recusada.\n\n"
+            f"Destino atual: {target['id']} ({target['state']})"
+        )
+        return
+    if not target_lb or target_lb[0]["state"] != "standby":
+        message(
+            "A configuração LB do destino não está em standby. O failover foi bloqueado.\n\n"
+            f"Destino: node {target['id']} ({target['state']}/{target_lb[0]['state'] if target_lb else 'sem LB'})"
+        )
+        return
+    active_lbs = db.rows("SELECT * FROM load_balancers WHERE state='active'")
+    if len(active_lbs) != 1 or active_lbs[0]["node_id"] != source["id"]:
+        message(
+            "A topologia não tem exatamente a origem como único LB active. O failover manual foi bloqueado."
+        )
+        return
+    motivo = ask("Motivo obrigatório")
+    if motivo is None or not motivo.strip():
+        return
+    isolation_reference = ask("Evidência de isolamento")
+    if isolation_reference is None or not isolation_reference.strip():
+        return
+    confirmation = ask("Confirmação", "")
+    if confirmation is None or confirmation.strip() != "CONFIRMO_ISOLAMENTO_DO_111":
+        message("Confirmação incorreta. A operação foi cancelada.")
+        return
+    summary = "\n".join([
+        "FAILOVER MANUAL DO CONTROLADOR DNS",
+        "",
+        f"Origem: {source['id']} / {source['ipv4']}",
+        f"Destino: {target['id']} / {target['ipv4']}",
+        "Função: controlador DNS; sem tráfego de mídia",
+        "Edges esperadas: .168, .170, .78",
+        "",
+        f"Motivo: {motivo.strip()}",
+        f"Evidência de isolamento: {isolation_reference.strip()}",
+        "",
+        "A operação vai executar preflight read-only, adquirir lease, promover o destino, reconciliar DNS e validar o laboratório.",
+    ])
+    message(summary, 22)
+    if not confirm("Confirmar o failover manual agora?\n\nAção irreversível nesta sessão."):
+        return
+    event_payload: dict[str, object] = {
+        "operation": "manual_dns_controller_failover",
+        "source_node": source["id"],
+        "target_node": target["id"],
+        "reason": motivo.strip(),
+        "isolation_reference": isolation_reference.strip(),
+        "from_state": target["state"],
+        "to_state": "active",
+    }
+    try:
+        preflight = _run_manual_failover_preflight(target)
+        event_payload["preflight"] = preflight
+        lease = topology.acquire_promotion_lock(
+            "manual_dns_controller_failover",
+            target["id"],
+            "mago-cdn-menu",
+            motivo.strip(),
+            30,
+        )
+        event_payload["lease_id"] = lease["lease_id"]
+        event_payload["fencing_token"] = lease["fencing_token"]
+        topology.demote_load_balancer(
+            source["id"],
+            "standby",
+            "mago-cdn-menu",
+            motivo.strip(),
+        )
+        event_payload["source_demoted"] = True
+        promoted = topology.promote_load_balancer(
+            target["id"],
+            "manual_dns_controller_failover",
+            lease["lease_id"],
+            lease["fencing_token"],
+            "mago-cdn-menu",
+            motivo.strip(),
+        )
+        event_payload["promotion_state"] = promoted["state"] if isinstance(promoted, dict) else "active"
+        dns_result = reconcile_cluster_dns(db, operator="mago-cdn-menu", canonical=db.setting("managed_canonical_host", "cdn.phpd77.com"))
+        event_payload["dns_result"] = dns_result
+        lab_result = _run_manual_failover_lab()
+        event_payload["lab_result"] = {"status": "ok", **lab_result}
+        topology.record_manual_failover(target["id"], "mago-cdn-menu", motivo.strip(), event_payload)
+        message(
+            "Failover manual concluído com sucesso.\n\n"
+            f"Destino ativo: {target['id']} / {target['ipv4']}\n"
+            f"Lease: {lease['lease_id']}\n"
+            f"Fencing token: {lease['fencing_token']}\n"
+            "DNS e laboratório foram validados."
+        )
+    except Exception as exc:
+        event_payload["error"] = _shorten(str(exc), 1000)
+        event_payload["lab_result"] = {"status": "failed"} if "lab_result" not in event_payload else event_payload["lab_result"]
+        try:
+            topology.record_manual_failover(target["id"], "mago-cdn-menu", motivo.strip(), event_payload)
+        except Exception:
+            pass
+        message(f"Failover manual interrompido:\n\n{_shorten(str(exc), 1200)}")
 
 
 def edge_rename(db: Database) -> None:
@@ -912,6 +1153,7 @@ def infrastructure_menu(db: Database) -> None:
             ("5", "Solicitações para preparar Load Balancer"),
             ("6", "Capacidade, consumo e pressão do cluster"),
             ("7", "Ajustar perfil de capacidade de um nó"),
+            ("8", "Failover manual do controlador DNS"),
             ("0", "Voltar"),
         ])
         if action in (None, "0"): return
@@ -922,6 +1164,7 @@ def infrastructure_menu(db: Database) -> None:
         elif action == "5": promotion_requests_menu(db)
         elif action == "6": capacity_overview(db)
         elif action == "7": capacity_profile_update(db)
+        elif action == "8": manual_controller_failover(db)
 
 
 def operations_menu(db: Database) -> None:

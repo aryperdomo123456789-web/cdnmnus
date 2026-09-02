@@ -549,6 +549,7 @@ def main():
                                "8", "Abrir menu do Control Plane (DNS/Cloudflare/XUI)",
         ]
         entries.extend(["7", "Promover esta Edge para Load Balancer (solicitar aprovação)"])
+        entries.extend(["9", "Failover manual do controlador DNS"])
         entries.extend(["0", "Sair"])
         code, action = dialog(["--menu", header, "21", "92", str(len(entries) // 2), *entries])
         if code != 0 or action == "0": return 0
@@ -587,6 +588,11 @@ def main():
                 open_control_plane_menu(host)
             except Exception as exc:
                 message("MENU DO CONTROL PLANE INDISPONÍVEL\n\n" + str(exc))
+        elif action == "9":
+            try:
+                open_control_plane_menu(host)
+            except Exception as exc:
+                message("MENU DE FAILOVER INDISPONÍVEL\n\n" + str(exc))
 
 
 if __name__ == "__main__":

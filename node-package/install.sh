@@ -3,6 +3,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 readonly PACKAGE_SCHEMA=1
+readonly MENU_SOURCE_RELATIVE=ansible/roles/node_menu/files/node_menu.py
+readonly MENU_TARGET=/usr/local/lib/cdnmnus-node-menu.py
 ROLE=""
 NODE_ID=""
 NODE_NAME=""
@@ -126,7 +128,17 @@ systemctl disable --now haproxy >/dev/null 2>&1 || true
 install -d -o root -g root -m 0755 /etc/cdnmnus /usr/local/lib/cdnmnus-node
 install -d -o root -g root -m 0755 /opt/cdnmnus/releases /opt/cdnmnus/runtime
 install -d -o root -g root -m 0750 /var/lib/cdnmnus-node /var/lib/cdnmnus-edge
-install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/roles/node_menu/files/node_menu.py" /usr/local/lib/cdnmnus-node-menu.py
+install -o root -g root -m 0755 "$PROJECT_ROOT/$MENU_SOURCE_RELATIVE" "$MENU_TARGET"
+menu_digest="$(python3 - "$MANIFEST" <<'PY'
+import json
+import sys
+
+manifest = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print(manifest["files"]["ansible/roles/node_menu/files/node_menu.py"])
+PY
+)"
+printf '%s  %s\n' "$menu_digest" "$MENU_TARGET" | sha256sum -c - >/dev/null \
+  || die 'menu instalado diverge do manifesto autorizado'
 install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/roles/node_menu/files/mago-cdn" /usr/local/bin/mago-cdn
 install -o root -g root -m 0755 "$PROJECT_ROOT/ansible/files/verify_release.py" /usr/local/bin/cdnmnus-verify-release
 install -o root -g root -m 0755 "$PROJECT_ROOT/scripts/cdnmnus-ansible-become" /usr/local/sbin/cdnmnus-ansible-become

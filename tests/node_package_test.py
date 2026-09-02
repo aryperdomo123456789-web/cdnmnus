@@ -46,8 +46,17 @@ class NodePackageTest(unittest.TestCase):
         self.assertIn("manifest-digest", installer)
         self.assertIn("rollback_install", installer)
         self.assertIn("systemctl disable --now haproxy", installer)
+        self.assertIn("MENU_SOURCE_RELATIVE=ansible/roles/node_menu/files/node_menu.py", installer)
+        self.assertIn("menu instalado diverge do manifesto autorizado", installer)
         self.assertIn("git clone --quiet --depth 1 --branch", bootstrap)
         self.assertIn("actual_commit", bootstrap)
+
+    def test_menu_distribution_uses_the_same_source(self) -> None:
+        role = (ROOT / "ansible/roles/node_menu/tasks/main.yml").read_text()
+        installer = (ROOT / "node-package/install.sh").read_text()
+        self.assertIn("src: node_menu.py\n    dest: /usr/local/lib/cdnmnus-node-menu.py", role)
+        self.assertIn("MENU_SOURCE_RELATIVE=ansible/roles/node_menu/files/node_menu.py", installer)
+        self.assertIn("MENU_TARGET=/usr/local/lib/cdnmnus-node-menu.py", installer)
 
     def test_menu_only_requests_and_control_plane_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,6 +107,7 @@ class NodePackageTest(unittest.TestCase):
         self.assertIn('ask("Usuário SSH inicial", "root")', control_menu)
         self.assertIn("Capacidade, consumo e saúde do cluster", menu)
         self.assertIn("Definir perfil contratado desta VPS", menu)
+        self.assertIn("Failover manual do controlador DNS", menu)
         self.assertIn("cdnmnus-submit-node-onboarding", menu)
         self.assertIn("cdnmnus-submit-capacity-sample", menu)
         self.assertIn("cdnmnus-submit-capacity-profile", menu)

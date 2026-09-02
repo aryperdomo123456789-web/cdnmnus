@@ -2,8 +2,8 @@
   "files": {
     "ansible/files/verify_release.py": "23f82877f874801fb81d6e4c4b9fa79cd8f3e77ceccf63c5e130923d057460c6",
     "ansible/roles/node_menu/files/mago-cdn": "050077844c921a93fdc3013bcfec2d00d3956b1f005d611e245bd646f9beb297",
-    "ansible/roles/node_menu/files/node_menu.py": "0bc7c4aed6d2d2d9e2da6621c9991427ae4aded0b0610afd2004fbdf58bb260d",
-    "node-package/install.sh": "dc8d8bdca6ec090ccea2c3af0d2987249baa46871347066fe1562623d1886075",
+    "ansible/roles/node_menu/files/node_menu.py": "6689cded838af3c51dc376551438012c95a290c523286dcbae98871e7b338e95",
+    "node-package/install.sh": "adae3d76538685ff7ec11d4f57b12ae2949ef21f7d10fa8a6b8ccf6306adf7fd",
     "node-package/verify.py": "acf846ae6c76b7bc35a377277b8c27b4e7f1e07bf72d61130573f94977e34da6",
     "panel/cdnmnus-tenant-broker@.service": "5316967c3fcbb0c99eff499c8dde19c1a96500d589ff6543200a723e2b2dd0fc",
     "panel/cdnmnus-vod-relay@.service": "9e0dc86e8b4ec47592a111768a84c4aa59d204247c2e047ce0ead446dab88e6d",
@@ -12,5 +12,5 @@
     "scripts/cdnmnus-ansible-become": "feebc69470e7f5628714e33df84945e8ae9f44547cac84351aabd4ad158ed5ad"
   },
   "schema_version": 1,
-  "source_ref": "v0.5.0-managed-node.21"
+  "source_ref": "v0.5.0-managed-node.22"
 }

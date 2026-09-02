@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple, overload
 
-from core.db import Database, normalize_hostname, normalize_id, normalize_port
+from core.db import Database, _sanitized_event_payload, normalize_hostname, normalize_id, normalize_port
 
 
 MIGRATION_ID = "20260829_topology_v1"
@@ -365,9 +365,29 @@ class TopologyStore:
                    id,node_id,event_type,operator,reason,payload_sanitized,created_at
                ) VALUES(?,?,?,?,?,?,?)""",
             (event_id, node_id, normalize_id(event_type, "event_type"), operator.strip(),
-             reason.strip(), encoded, _timestamp(_utc_now())),
+            reason.strip(), encoded, _timestamp(_utc_now())),
         )
         return event_id
+
+    def record_manual_failover(
+        self,
+        node_id: str,
+        operator: str,
+        reason: str,
+        payload: Mapping[str, Any],
+    ) -> str:
+        """Registra a operação manual de failover em auditoria sanitizada."""
+        sanitized_reason = str(_sanitized_event_payload(reason.strip())).replace("\n", " ")[:512]
+        sanitized_payload = _validate_payload(payload)
+        with self.database.transaction(immediate=True) as db:
+            return self._event(
+                db,
+                normalize_id(node_id, "node_id"),
+                "manual_failover",
+                operator,
+                sanitized_reason,
+                sanitized_payload,
+            )
 
     def add_node(self, node_id: str, name: str, ipv4: str, role: str, state: str,
                  operator: str, reason: str, capacity: Mapping[str, Any] | None = None,
