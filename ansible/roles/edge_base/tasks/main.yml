@@ -23,7 +23,7 @@
     dest: /etc/security/limits.d/90-cdnmnus.conf
     owner: root
     group: root
-  mode: '0644'
+    mode: '0644'
 
 - name: Aplicar remoção global de fingerprint HTTP
   ansible.builtin.copy:
