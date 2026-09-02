@@ -127,6 +127,7 @@
   ansible.builtin.copy:
     content: |
       Defaults:cdn-deploy env_keep += "SSH_CONNECTION"
+      Defaults:cdn-deploy !use_pty
       cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-ansible-become *
     dest: /etc/sudoers.d/cdn-deploy
     owner: root
