@@ -23,9 +23,8 @@ class TenantOnboardingService:
                  load_balancers: tuple[str, ...] = ()) -> dict[str, Any]:
         tenant = self.db.add_tenant(
             tenant_id, name, canonical_host, origin_host, origin_port, load_balancers,
+            enabled=False,
         )
-        self.db.set_tenant_enabled(tenant_id, False, operator=self.operator,
-                                   reason="aguardando onboarding transacional")
         return self.db.begin_tenant_onboarding(
             tenant_id, operator=self.operator,
             reason="tenant criado sem publicação pública",

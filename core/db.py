@@ -376,7 +376,7 @@ class Database:
 
     def add_tenant(self, tenant_id: str, name: str, canonical_host: str,
                    origin_host: str, origin_port: int = 80,
-                   load_balancers: Sequence[str] = ()) -> dict[str, Any]:
+                   load_balancers: Sequence[str] = (), *, enabled: bool = True) -> dict[str, Any]:
         tenant_id = normalize_id(tenant_id, "tenant_id")
         canonical_host = normalize_hostname(canonical_host)
         origin_host = normalize_origin_host(origin_host)
@@ -386,8 +386,8 @@ class Database:
         lbs = list(dict.fromkeys(normalize_hostname(item) for item in load_balancers if item.strip()))
         with self.transaction(immediate=True) as db:
             db.execute(
-                "INSERT INTO xui_tenants(id,name,canonical_host,health_host,playlist_host) VALUES(?,?,?,?,?)",
-                (tenant_id, name.strip(), canonical_host, canonical_host, canonical_host),
+                "INSERT INTO xui_tenants(id,name,canonical_host,health_host,playlist_host,enabled) VALUES(?,?,?,?,?,?)",
+                (tenant_id, name.strip(), canonical_host, canonical_host, canonical_host, int(bool(enabled))),
             )
             db.execute("INSERT INTO tenant_hosts(hostname,tenant_id,is_canonical) VALUES(?,?,1)",
                        (canonical_host, tenant_id))
