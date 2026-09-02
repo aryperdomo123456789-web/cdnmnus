@@ -9,8 +9,9 @@ deve ser lido junto com
 [RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md](RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md).
 
 **Data-base:** 01/09/2026
-**Topologia alvo:** `.111` control plane + LB ativo, `.237` LB standby,
-`.168/.170/.78` edges.
+**Topologia vigente:** `.111` control plane/DNS ativo, `.237` control plane/DNS
+standby, `.168/.170/.78` edges de dados. HAProxy frontal permanece apenas como
+perfil experimental e não faz parte do caminho público.
 **Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
 **Regra:** preservar o tráfego atual até o substituto passar por health,
 reprodução, rollback e soak.
@@ -40,11 +41,13 @@ Quando documentos históricos divergirem, use esta ordem:
 - [x] health `200` e TLS válido nas três edges;
 - [x] `.168/.170` na release `20260829012407-d60cfdbf`, digest
   `9e5457a1dd27609a573c0fd7cbcc80db1d84378da118d7e0dc70d70d7a534eb0`;
-- [~] `.111` ainda no runtime VOD legado, sem release ativa por symlink;
+- [x] `.111` é o controlador lógico ativo; `public-lb` possui lease/fencing;
 - [x] novo relay VOD instalado e ativo no systemd de `.168/.170`;
-- [ ] HAProxy frontal ativo na `.111`, PostgreSQL autoritativo, lease ou fencing instalados;
-- [~] `.237` possui papel lógico LB/standby, mas ainda usa release antiga e não
-  possui capacidade, health, lease ou fencing de produção.
+- [x] `cdn.phpd77.com` publica DNS-only para as edges saudáveis;
+- [~] HAProxy frontal não está ativo (deliberadamente); PostgreSQL autoritativo,
+  fencing externo e controlador contínuo de capacidade continuam pendentes;
+- [~] `.237` possui papel lógico LB/standby e não recebe streams; sua preparação
+  operacional completa continua sendo gate de failover.
 
 ### Banco e inventário
 
@@ -52,17 +55,17 @@ Quando documentos históricos divergirem, use esta ordem:
 `1` para `.111`, `2` para `.168` e `3` para `.170`; o próximo cadastro recebe
 `4` automaticamente. Os nomes operacionais das edges são `edge1`/`edge2`;
 os Load Balancers são `.111`/`.237`.
-de compatibilidade. O nó `1` está registrado `load_balancer/candidate`, sem
-promoção ou ativação.
+de compatibilidade. O nó `1` está registrado `load_balancer/active` e o nó `4`
+está `load_balancer/standby`, sob lease exclusiva do serviço `public`.
 
 O banco possui um tenant, uma origem, um LB upstream do fornecedor, duas seeds
 VOD e apenas `.168/.170` cadastradas. As duas aparecem como `ready`, com a
 release convergente registrada; `.111` não aparece. O inventário versionado
 contém `.168` e `.170`, ambas alinhadas como `ready`.
 
-Não confunda `tenant_upstreams.kind='lb'` (LB do fornecedor/XUI) com o LB
-frontal `.237/.111`, que possui modelo parcial no código, mas ainda precisa de
-registro operacional, backends, release e gates de produção.
+Não confunda `tenant_upstreams.kind='lb'` (LB do fornecedor/XUI) com os
+controladores `.237/.111`. Neste desenho, os controladores não entram no pool
+DNS de mídia e não transportam streams.
 
 ### Release VOD ativa nas edges
 
@@ -80,10 +83,11 @@ registro operacional, backends, release e gates de produção.
   `node_events` já existem em `core/topology.py`;
 - role Ansible `load_balancer` e playbooks de preflight/deploy/promoção/
   rebaixamento/rollback já existem;
-- HAProxy frontal possui template e testes, mas o `.111` ainda não está
-  convergido como LB ACTIVE e o `.237` ainda não está preparado como standby;
-- PostgreSQL, controlador contínuo de health/capacidade, quorum e fencing
-  externo continuam pendentes;
+- o perfil HAProxy possui template e testes de laboratório, mas não é o caminho
+  público vigente;
+- health DNS contínuo e política de admissão por capacidade existem em
+  `scripts/edge_health_controller.py`; coleta automática, alertas, quorum e
+  fencing externo continuam pendentes;
 - `ansible-playbook` continua dependente da instalação no control node.
 
 ## 3. Arquitetura final
@@ -91,31 +95,28 @@ registro operacional, backends, release e gates de produção.
 ```text
 Clientes
    |
-DNS/floating IP com health e fencing
-   |
-   +--------------------+
-   |                    |
-       LB .111 ACTIVE + CONTROL PLANE       LB .237 STANDBY
-             HAProxy sem cache              HAProxy sem cache
-   |                    |
-   +---------+----------+
-             |
-       +-----+-----+
-       |           |
-   EDGE .168   EDGE .170
- Nginx/broker  Nginx/broker
- relay/cache   relay/cache
-       |           |
-       +-----+-----+
-             |
-        XUI 1 ... N
+cdn.phpd77.com (DNS-only; apenas edges elegíveis)
+   +------------------+------------------+
+   |                  |                  |
+EDGE .168         EDGE .170          EDGE .78
+Nginx/broker      Nginx/broker        Nginx/broker
+relay/cache       relay/cache         relay/cache
+   |                  |                  |
+   +------------------+------------------+
+                  XUI 1 ... N
+
+.111 = control plane/DNS ativo       .237 = control plane/DNS standby
+       sem tráfego de mídia                 sem tráfego de mídia
 ```
 
 Invariantes:
 
 - uma VPS não pode ser EDGE e LB ACTIVE simultaneamente;
 - somente um LB ACTIVE na primeira versão;
-- LB frontal não cacheia mídia nem executa broker/relay;
+- control plane e standby não aparecem como A records de mídia;
+- LB frontal/HAProxy não faz parte do caminho público vigente;
+- DNS publica todas as edges `ready` e saudáveis; capacidade reduzida remove a
+  edge do pool, mas DNS não fornece balanceamento por conexão em tempo real;
 - edge reconstrói token/redirect localmente;
 - PostgreSQL é fonte autoritativa; SQLite nunca é copiado entre VPSs;
 - release de código é idêntica; configuração/capacidade local possui digest;

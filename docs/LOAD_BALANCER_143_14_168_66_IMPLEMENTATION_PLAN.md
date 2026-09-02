@@ -4,6 +4,12 @@
 homologação. Este documento cruza o plano solicitado com o código existente em
 28/08/2026.
 
+**Arquitetura vigente (02/09/2026):** este documento é histórico/laboratorial.
+O caminho público oficial é DNS-only direto para as edges `.168`, `.170` e
+`.78`; `.111` e `.237` são controladores de DNS/failover e não recebem tráfego
+de mídia. Os trechos abaixo que descrevem HAProxy frontal ou `.111` como
+entrada pública não são estado de produção nem plano vigente.
+
 **Atualização operacional em 31/08/2026:** a `.111` será o primeiro load
 balancer do sistema. Ela está registrada como LB `candidate`, ainda sem
 backends, e não deve ser descrita como LB ativo. O role/playbook de HAProxy e o
@@ -36,20 +42,20 @@ O projeto tem base de controle, runtime de edge e perfil LB laboratorial, mas
 ainda precisa de promoção real da `.111`, backends, controlador operacional de
 health, backup/restore e gates de produção.
 
-## 2. Arquitetura alvo
+## 2. Arquitetura histórica, não vigente
 
 ```text
-fase 1: cliente -> cdn.phpd77.com -> LB 143.14.168.111
-                                          |-> edge 143.14.168.168
-                                          `-> edge 143.14.168.170
+laboratório: cliente -> cdn.phpd77.com -> LB 143.14.168.111
+                                                |-> edge 143.14.168.168
+                                                `-> edge 143.14.168.170
 
 fase 2: cliente -> cdn.phpd77.com -> LB 143.14.168.66
                                           |-> edge 143.14.168.168
                                           `-> edge 143.14.168.170
 ```
 
-Na primeira virada, a `.111` será o LB e `.168/.170` serão seus backends. A
-`.66` permanece o destino posterior. Por decisão operacional atual, todos os
+Esse fluxo não deve ser promovido para produção. A `.66` permanece bloqueada.
+Por decisão operacional atual, todos os
 nós mantêm `22/80/443` públicos; restringir mídia exclusivamente ao LB será um
 hardening futuro separado. Os A records atuais são round-robin DNS, não
 failover. O LB deve preservar Host/SNI, Range, respostas 206, timeouts e

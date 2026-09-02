@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
 
 from core.db import Database  # noqa: E402
 from core.dns_reconciler import reconcile_cluster_dns  # noqa: E402
+from core.capacity_policy import evaluate_capacity  # noqa: E402
+from core.topology import TopologyStore  # noqa: E402
 
 TIMEOUT = max(2, int(os.environ.get("CDNMNUS_EDGE_HEALTH_TIMEOUT", "8")))
 FAIL_THRESHOLD = max(1, int(os.environ.get("CDNMNUS_EDGE_HEALTH_FAIL_THRESHOLD", "3")))
@@ -40,6 +42,8 @@ def probe(ip: str, host: str) -> tuple[bool, int | None, str]:
 def main() -> int:
     db = Database()
     db.initialize()
+    topology = TopologyStore(db)
+    topology.initialize()
     changed = False
     results = []
     tenants = db.tenants(enabled_only=True)
@@ -64,8 +68,25 @@ def main() -> int:
             reason="; ".join(hosts),
         )
         changed |= before != after["state"]
+        capacity = topology.capacity_profile(edge["id"])
+        sample_rows = db.rows(
+            "SELECT * FROM node_capacity_samples WHERE node_id=? ORDER BY sampled_at DESC,id DESC LIMIT 1",
+            (edge["id"],),
+        )
+        capacity_result = None
+        if capacity and sample_rows:
+            capacity_result = evaluate_capacity(capacity, sample_rows[0])
+            previous = topology.capacity_runtime(edge["id"])
+            topology.set_capacity_runtime(
+                edge["id"], capacity_result["state"], capacity_result["pressure"],
+                capacity_result["desired_weight"], capacity_result["desired_weight"],
+                "capacity policy from latest sanitized sample",
+            )
+            changed |= not previous or previous["state"] != capacity_result["state"]
         results.append({"edge_id": edge["id"], "healthy": healthy,
                         "status": status, "state": after["state"], "detail": detail})
+        if capacity_result is not None:
+            results[-1]["capacity"] = capacity_result
     if changed:
         active = [item["ipv4"] for item in db.edges() if item["state"] == "ready"]
         if active:

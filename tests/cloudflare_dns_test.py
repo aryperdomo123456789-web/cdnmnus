@@ -61,6 +61,18 @@ class CloudflareDNSTest(unittest.TestCase):
         self.assertNotIn("143.14.168.111", [x["content"] for x in provider.items["cdn.phpd77.com"]])
         self.assertEqual(provider.items["outro.phpd77.com"][0]["content"], "192.0.2.10")
 
+    def test_direct_pool_tracks_load_balancer_ips(self) -> None:
+        from core.dns_reconciler import _load_balancer_ips
+
+        class Inventory:
+            def rows(self, query):
+                if "sqlite_master" in query:
+                    return [{"name": "nodes"}]
+                return [{"ipv4": "143.14.168.111"}, {"ipv4": "45.140.192.237"}]
+
+        self.assertEqual(_load_balancer_ips(Inventory()),
+                         {"143.14.168.111", "45.140.192.237"})
+
 
 if __name__ == "__main__":
     unittest.main()

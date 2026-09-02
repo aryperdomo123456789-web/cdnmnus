@@ -68,16 +68,50 @@ class DNSReconciler:
         return [{"name": canonical, "type": "A", "content": ip} for ip in desired]
 
 
+def _load_balancer_ips(db: Database) -> set[str]:
+    """Return LB addresses so they can never enter the direct edge pool."""
+    tables = {row["name"] for row in db.rows(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('nodes', 'load_balancers')"
+    )}
+    if "nodes" not in tables:
+        return set()
+    rows = db.rows("SELECT ipv4 FROM nodes WHERE role='load_balancer'")
+    return {str(row["ipv4"]).strip() for row in rows if row["ipv4"]}
+
+
+def _capacity_blocked_edge_ips(db: Database) -> set[str]:
+    """Exclude only edges explicitly marked unable to accept new sessions."""
+    rows = db.rows("""
+        SELECT n.ipv4
+          FROM nodes n
+          JOIN node_capacity_runtime r ON r.node_id=n.id
+         WHERE n.role='edge' AND r.state IN ('draining','saturated','down')
+    """)
+    return {str(row["ipv4"]).strip() for row in rows if row["ipv4"]}
+
+
 def reconcile_cluster_dns(db: Database, *, operator: str = "control-plane",
                           canonical: str | None = None) -> dict[str, list[dict[str, str]]]:
-    """Publica somente edges ready e todos os aliases cadastrados."""
+    """Publish a DNS-only pool that sends media directly to healthy edges.
+
+    LBs are control-plane/failover infrastructure in this mode. They must not
+    become an accidental data-plane hop when a node is added to the inventory.
+    """
     canonical = canonical or db.setting("managed_canonical_host", "cdn.phpd77.com")
     provider = CloudflareDNS()
     reconciler = DNSReconciler(provider, protected_target=canonical, db=db, operator=operator)
     edges = [item for item in db.edges() if item["state"] == "ready"]
+    lb_ips = _load_balancer_ips(db)
+    edge_ips = [item["ipv4"] for item in edges]
+    accidental_lbs = set(edge_ips) & lb_ips
+    if accidental_lbs:
+        raise RuntimeError(
+            "pool DNS direto contém IP registrado como load balancer: "
+            + ", ".join(sorted(accidental_lbs))
+        )
     pool = reconciler.repair_canonical_pool(
-        canonical, [item["ipv4"] for item in edges],
-        forbidden_ips={"143.14.168.111"},
+        canonical, edge_ips,
+        forbidden_ips=lb_ips | {"143.14.168.111"} | _capacity_blocked_edge_ips(db),
     )
     aliases: list[dict[str, str]] = []
     for tenant in db.tenants(enabled_only=True):

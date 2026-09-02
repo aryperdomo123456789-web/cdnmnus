@@ -1,6 +1,13 @@
 # Estado real do projeto
 
-Data-base: 2026-09-01
+Data-base: 2026-09-02
+
+Atualização operacional de 2026-09-02: o node `1` / `.111` foi reconciliado
+como controlador lógico `active` com lease `public` e fencing token `1`. O
+menu `v0.5.0-managed-node.22` foi distribuído isoladamente às cinco VPS; o
+runtime universal de edges/LB não foi reinstalado. As três edges receberam
+baseline de capacidade declarada de 10.000 Mbps, ainda sem medição de throughput
+nem controlador automático de pesos.
 
 Este documento é a fotografia operacional do projeto. Ele deve ser atualizado
 sempre que houver mudança real no código, nos testes, no laboratório ou na
@@ -116,19 +123,19 @@ Regra de ouro:
 
 ## 2. Topologia operacional atual
 
-Estado informado e adotado como fonte de verdade para a próxima janela:
+Estado observado em 2026-09-02:
 
 | Nó | Papel lógico | Estado | Condição operacional |
 | --- | --- | --- | --- |
-| `45.140.192.237` | `load_balancer` | `standby` | edge table `disabled`; release antiga de laboratório; sem capacidade, health, lease ou fencing ativo |
-| `143.14.168.111` | `load_balancer` | `candidate` | ainda não é `active`; não usar como edge publicada nem promover sem aprovação |
-| `143.14.168.168` | `edge` | `ready` | release atual validada, sujeita aos gates prolongados |
-| `143.14.168.170` | `edge` | `ready` | release atual validada, sujeita aos gates prolongados |
+| `45.140.192.237` | `load_balancer` | `standby` | controlador standby; sem tráfego de mídia |
+| `143.14.168.111` | `load_balancer` | `active` | controlador DNS ativo; HAProxy frontal inativo |
+| `143.14.168.168` | `edge` | `ready` | health 200; baseline declarada 10 Gbps |
+| `143.14.168.170` | `edge` | `ready` | health 200; baseline declarada 10 Gbps |
+| `143.14.168.78` | `edge` | `ready` | health 200; baseline declarada 10 Gbps |
 
-Objetivo aprovado para a próxima topologia: `.237` como único LB
-`PRIMARY/ACTIVE` e `.111` como LB `STANDBY`, com `.168/.170` como edges.
-Antes de executar isso, o control-plane precisa ter identidade própria e não
-depender implicitamente de `.111`; o modelo de papel é exclusivo por nó.
+O modelo vigente é DNS-only: `.111` é o controlador ativo, `.237` é standby e
+`.168/.170/.78` são o pool de dados. HAProxy frontal permanece exclusivamente
+laboratorial; o control plane não recebe streams.
 
 Não existe lease/fencing ativo, health recente ou capacidade declarada para o
 `.237`. Portanto ele é candidato operacional, não LB de produção.

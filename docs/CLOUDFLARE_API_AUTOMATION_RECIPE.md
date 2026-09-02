@@ -2,10 +2,9 @@
 
 **Estado real:** o cliente Cloudflare e o reconciliador local já existem em
 `core/cloudflare_dns.py` e `core/dns_reconciler.py`. A escrita real depende de
-token/zona configurados e continua sujeita aos gates de produção. O código
-atual ainda publica o pool de edges prontas; ele não deve ser tratado como o
-failover final do LB `.237` até existir VIP/fencing ou publicação controlada do
-endpoint LB.
+token/zona configurados e continua sujeita aos gates de produção. O modo
+oficial vigente publica somente o pool DNS-only de edges prontas; `.111` e
+`.237` são controladores e nunca endpoints de mídia.
 
 Esta é a sequência oficial para o operador. O sistema controla somente DNS
 das zonas informadas, sempre `DNS-only`, e nunca envia o IP da origem para a
@@ -45,12 +44,20 @@ O reconciliador atualmente aplica, quando autorizado, estas regras:
 ```text
 cdn.phpd77.com A 143.14.168.168 DNS-only
 cdn.phpd77.com A 143.14.168.170 DNS-only
+cdn.phpd77.com A 143.14.168.78 DNS-only
 ```
 
-O `.237` não entra nesse pool enquanto for LB. O sistema publica somente
+O `.111` e o `.237` não entram nesse pool enquanto forem LBs. O sistema publica somente
 edges com estado `ready`; edge `pending`, `bootstrapping`, `draining`,
 `failed` ou `disabled` não entra no DNS. A operação substitui todos os A,
 AAAA e CNAME do hostname canônico para impedir estado misto.
+
+Este é o modo oficial de **DNS health check com resposta direta das edges**.
+O cliente nunca passa por HAProxy: o controlador central testa
+`https://HOST_DA_EDGE/edge-health` com SNI, aplica a histerese de falhas/sucessos
+e reconcilia os A records DNS-only. Se um IP aparecer simultaneamente como edge
+e load balancer no inventário, a reconciliação falha fechada em vez de publicar
+o LB acidentalmente.
 
 Importante: isso é limitado ao hostname controlado `cdn.phpd77.com`. Outros
 subdomínios existentes na zona nunca são varridos, editados ou excluídos.
@@ -86,10 +93,10 @@ alias no conteúdo M3U. O acesso direto a `cdn.phpd77.com` responde `421` e não
 10. Gere uma implantação para instalar a configuração nas edges. O XUI nunca
    é publicado diretamente no DNS.
 
-Para a topologia de produção desejada, a publicação final deve ser alterada
-para o endpoint do LB ativo (`.237` ou VIP), depois de lease e fencing
-confirmados. Não publique `.237` manualmente e não mantenha simultaneamente o
-pool de edges e o endpoint LB sem uma decisão arquitetural registrada.
+Para esta topologia, não altere a publicação para o endpoint do LB. Lease e
+fencing protegem a continuidade do controlador DNS entre `.111` e `.237`; o
+data plane continua sendo o pool direto das edges. Só use LB como data plane
+se houver uma decisão arquitetural posterior e capacidade de banda comprovada.
 
 Se a API falhar, o cadastro local permanece identificado como não aplicado e
 o menu manda repetir a reconciliação. Não considere o hostname pronto nesse
@@ -103,8 +110,8 @@ dig +short A cdn.phpd77.com
 ```
 
 O primeiro comando deve mostrar `cdn.phpd77.com.`. O segundo deve mostrar
-somente `143.14.168.168` e `143.14.168.170` quando essas duas edges estiverem
-`ready`.
+somente as edges que estiverem `ready` e saudáveis, normalmente
+`143.14.168.168`, `143.14.168.170` e `143.14.168.78`.
 
 Depois execute o laboratório oficial com uma conta exclusiva de teste:
 

@@ -14,20 +14,19 @@ python3 scripts/cdnmnus-readiness-audit.py
 ```text
 Clientes
   |
-DNS/VIP com health e fencing
+DNS-only com health check
   |
-LB 143.14.168.111 ACTIVE     LB 45.140.192.237 STANDBY
-CONTROL PLANE + HAProxy       HAProxy sem tráfego
-  |                           |
-  +-------------+-------------+
-                |
-     143.14.168.168 / .170 / .78
-                |
-       múltiplos XUIs e VOD
+143.14.168.168 / .170 / .78  (somente edges saudáveis)
+  |
+múltiplos XUIs e VOD
+
+143.14.168.111  controlador DNS/health + LB de contingência
+45.140.192.237  controlador DNS/health standby
 ```
 
 O IP `.66` não faz parte do ambiente atual. A máquina remota `.237` é o node
-`4`; o node `1`, `143.14.168.111`, é o control plane atual e será o LB ACTIVE.
+`4`; o node `1`, `143.14.168.111`, é o control plane/DNS ativo. Nenhum desses
+controladores recebe tráfego de mídia.
 As edges são nodes `2`, `3` e `6`.
 
 ## Ordem sem risco
@@ -36,17 +35,14 @@ As edges são nodes `2`, `3` e `6`.
 2. Mantenha as três edges no mesmo release ID e digest.
 3. Faça backup e restore do banco antes de alterar papéis.
 4. Garanta SSH pinado, console e pacote autorizado em `.237` e `.111`.
-5. Execute `preflight` do role `load_balancer` com `serial: 1`.
-6. Faça `deploy` em `.111` para gerar candidato HAProxy; não publique ainda.
-7. Teste `haproxy -c`, TLS, `/lb-health`, `/edge-health`, live, filme, série e
-   `Range` usando `--resolve`.
-8. Registre os backends `.168`, `.170` e `.78` com pesos e health.
-9. Adquira lease exclusiva e fencing token crescente no control plane.
-10. Promova `.111` somente depois de comprovar fencing do endpoint anterior.
-11. Prepare `.237` com a mesma release e deixe-o `standby`, sem lease ativa.
-12. Faça ensaio de queda de edge, drain, queda do LB, promoção `.237` e retorno.
-13. Só então substitua o DNS round-robin pelo endpoint controlado do LB.
-14. Ative coleta de capacidade, alertas, pesos dinâmicos e soak sustentado.
+5. Execute health com SNI e `/edge-health` nas três edges.
+6. Confirme perfis de capacidade e capacidade útil antes de ampliar o pool.
+7. Publique `cdn.phpd77.com` somente como DNS-only para as edges saudáveis; nunca
+    aponte esse hostname para `.111` ou `.237` neste modo.
+8. Faça ensaio de queda de edge, drain, retirada DNS, recuperação e soak.
+9. Mantenha `.237` preparada como standby de controle, sem streams.
+10. Ative coleta contínua de capacidade quando o controlador dedicado estiver
+    homologado; DNS não suporta pesos por conexão em tempo real.
 
 ## Gatilhos de parada
 
@@ -63,6 +59,11 @@ bloqueando a nota 10 enquanto `.111` não for promovida com lease/fencing,
 `.237` não for preparada como standby real, e o PostgreSQL autoritativo,
 VIP/API de fencing, controlador contínuo de capacidade e teste de desastre
 também são gates externos; não devem ser simulados por um script local.
+
+O health check é executado pelo `scripts/edge_health_controller.py`, que testa
+cada edge com SNI e `/edge-health`. Após a histerese configurada, ele remove ou
+recoloca o A record da edge no Cloudflare. `.111` e `.237` não transportam
+streams nesse desenho; eles apenas executam o controle e a reconciliação DNS.
 
 Documentação detalhada: [runbook mestre](PRODUCTION_MULTI_LB_MULTI_EDGE_MULTI_XUI_RUNBOOK.md)
 e [receita de capacidade e failover](CAPACITY_CONTROLLER_AND_MULTI_LB_RECIPE.md).

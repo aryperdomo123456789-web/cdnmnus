@@ -6,22 +6,28 @@ Escopo: transformar a topologia atual em uma rede que mede capacidade, ajusta
 pesos, retira máquinas saturadas, pede novas máquinas e mantém um único
 endpoint público.
 
-Este documento é um plano de implementação. Ele não afirma que o controlador
-contínuo já existe. Hoje o pacote instala edge/LB, o menu cria onboarding e a
-promoção termina em `candidate`/`standby`; as seis capacidades deste documento
-continuam sendo trabalho de implementação e validação.
+Este documento é um plano de implementação de capacidade para o caminho
+DNS-only vigente. O controlador lógico não transporta mídia: o DNS publica as
+edges elegíveis e saudáveis. DNS não consegue balancear conexões individuais
+nem aplicar pesos de forma determinística depois que um resolver armazenou um
+registro; portanto a política é distribuir novas resoluções entre todas as
+edges e remover rapidamente uma edge pressionada ou doente.
 
 ## 1. Regra simples
 
 1. O cliente usa somente `cdn.phpd77.com`.
-2. Esse nome aponta para **o LB ativo `.111`** (preferencialmente IP flutuante).
-3. O LB ativo distribui para edges saudáveis.
-4. O LB standby `.237` não recebe tráfego e mantém a mesma configuração assinada.
+2. Esse nome publica A records DNS-only somente para `.168`, `.170` e `.78`
+   quando estiverem `ready` e saudáveis.
+3. `.111` decide/reconcilia e `.237` fica standby; nenhum deles transporta mídia.
+4. Todas as edges declaradas com a mesma capacidade recebem participação
+   equivalente no pool; uma edge pressionada é drenada/removida.
 5. Um controlador no control-plane decide; nenhum menu promove diretamente.
 6. Toda decisão é registrada, bloqueada por lock/fencing, testada e reversível.
 
-Nunca publicar DNS round-robin como se fosse failover: ele não sabe qual
-servidor está vivo e não remove sessões de uma edge saturada.
+DNS round-robin não é balanceamento perfeito de conexões: resolvers podem
+manter cache e uma sessão existente não muda de edge. O health controller
+remove uma edge para novas resoluções após histerese; conexões existentes
+terminam na edge escolhida pelo cliente.
 
 ## 2. Estado real de partida
 
@@ -101,9 +107,10 @@ O modelo novo já está implementado em `core/topology.py`, com tabelas
 `node_capacity_runtime`. Os scripts `submit_capacity_profile.py`,
 `submit_capacity_sample.py` e `cluster_status.py` também existem.
 
-Isso não significa que o controlador de produção exista: ainda faltam o
-coletor contínuo, a política de cálculo aplicada automaticamente, os alertas,
-o adapter de HAProxy runtime e o fencing externo.
+O cálculo determinístico de pressão e a admissão DNS já existem em
+`core/capacity_policy.py`, integrados ao health controller. Ainda faltam o
+coletor contínuo de métricas, alertas, medição contratual/iperf e fencing
+externo. Pesos HAProxy continuam fora do caminho DNS-only.
 
 ### 4.2 Banco/control-plane: o que ainda falta
 
@@ -129,7 +136,7 @@ conexões, CPU, memória, erros NIC, latência e resultado de `/edge-health`.
 Enviar por mTLS ao control-plane; se não houver conectividade, manter fila
 local limitada e expirar amostras antigas.
 
-### 4.4 Controlador
+### 4.4 Controlador de capacidade e admissão DNS
 
 Criar `cdnmnus-capacity-controller.service` no control-plane. Um único líder
 executa (lease de 15 s renovado a cada 5 s); os demais apenas observam. O loop
@@ -141,7 +148,8 @@ a cada 10 s:
   calcular pressão e estado de cada edge
   calcular peso desejado com histerese
   transacionar decisão + auditoria + fencing token
-  aplicar peso somente no LB ativo (socket runtime HAProxy)
+  manter no DNS todas as edges saudáveis e não bloqueadas por capacidade
+  remover do DNS edges em draining/saturated/down
   publicar alerta/onboarding quando o headroom do conjunto for insuficiente
 ```
 
@@ -175,9 +183,10 @@ flapping. Para `draining/down`, usar `set server ... state drain` e depois
 `weight 0`; aguardar o maior timeout de VOD antes de desabilitar. Cinco sucessos
 não bastam se o perfil estiver expirado ou o digest divergente.
 
-O socket runtime (`stats socket`) é o caminho de pesos frequentes; reload de
-configuração só para mudança estrutural. O standby recebe snapshot assinado,
-mas nunca aplica tráfego enquanto não for promovido.
+O socket runtime (`stats socket`) e pesos HAProxy são somente laboratório neste
+desenho. O standby recebe estado assinado, mas nunca aplica tráfego enquanto
+não for promovido. No DNS-only, nenhuma ordenação de A records é tratada como
+peso: todos os nós elegíveis são publicados.
 
 ## 6. Remoção automática e onboarding
 
@@ -254,10 +263,10 @@ um único LB ativo e failover/rollback reproduzíveis.
 
 ## 9. Ordem de implementação segura
 
-1. Implementar migração/tabelas e testes unitários do cálculo.
+1. Manter a política de admissão DNS e seus testes unitários.
 2. Implementar coletor em laboratório; validar assinatura, relógio e retenção.
-3. Implementar controlador em modo `observe` (não altera pesos).
-4. Ativar pesos runtime em uma edge canário; comparar com métricas reais.
+3. Executar o controlador em modo `observe` com amostras reais.
+4. Ativar remoção DNS por capacidade em uma edge canário; comparar com métricas reais.
 5. Ativar drain automático e alertas; revisar falsos positivos por 24 h.
 6. Integrar onboarding como solicitação aprovada no menu.
 7. Implementar provider adapter de VIP; só então Cloudflare DNS como fallback.
