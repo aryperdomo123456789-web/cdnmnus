@@ -91,3 +91,22 @@
     owner: root
     group: root
     mode: '0600'
+
+- name: Instalar helper root-only de become do Ansible no LB
+  ansible.builtin.copy:
+    src: /opt/cdnmnus/scripts/cdnmnus-ansible-become
+    dest: /usr/local/sbin/cdnmnus-ansible-become
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Restringir sudo do usuário de deployment ao helper no LB
+  ansible.builtin.copy:
+    content: |
+      cdn-deploy ALL=(root) NOPASSWD: /usr/local/sbin/cdnmnus-ansible-become *
+    dest: /etc/sudoers.d/cdn-deploy
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -cf %s

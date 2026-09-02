@@ -193,6 +193,8 @@ def _inventory(db: Database, key_dir: str | Path = "/etc/cdnmnus/ssh", *,
             "cdnmnus_node_role": "edge",
             "cdnmnus_node_state": "ready",
         }
+        if db.setting("restricted_become_enabled", False):
+            hosts[edge["id"]]["ansible_become_exe"] = "/usr/local/sbin/cdnmnus-ansible-become"
     if not hosts:
         raise ValueError("nenhuma edge elegível para este deployment")
     # Em um onboarding direcionado o inventário contém apenas o alvo. Ainda
