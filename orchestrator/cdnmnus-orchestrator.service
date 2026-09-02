@@ -19,6 +19,7 @@ RestartSec=3
 # The TLS helper is the only sudoers-authorized root operation for this user.
 # NoNewPrivileges would prevent sudo from entering that constrained path.
 PrivateTmp=true
+NoNewPrivileges=false
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/cdnmnus-admin /etc/cdnmnus/ssh /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt
