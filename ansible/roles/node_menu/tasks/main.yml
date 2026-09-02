@@ -193,6 +193,24 @@
     mode: '0770'
   when: cdnmnus_node_role == 'control_plane'
 
+- name: Garantir leitura da configuração DNS pelo worker sem expor o token
+  ansible.builtin.file:
+    path: /etc/cdnmnus/cloudflare
+    state: directory
+    owner: root
+    group: cdn-admin
+    mode: '0750'
+  when: cdnmnus_node_role == 'control_plane'
+
+- name: Restringir arquivo de zonas DNS ao control plane
+  ansible.builtin.file:
+    path: /etc/cdnmnus/cloudflare/zones
+    state: file
+    owner: root
+    group: cdn-admin
+    mode: '0640'
+  when: cdnmnus_node_role == 'control_plane'
+
 - name: Instalar sudoers mínimo do helper ACME
   ansible.builtin.copy:
     src: cdnmnus-acme.sudoers
