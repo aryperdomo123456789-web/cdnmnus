@@ -845,6 +845,34 @@ def tenant_vhost(db: Database) -> None:
     message(render_tenant(db.tenant(selected)).content, 28)
 
 
+def tenant_resync_m3u(db: Database) -> None:
+    tenants = db.tenants()
+    selected = choose("XUI para ressincronizar M3U", [(x["id"], x["canonical_host"]) for x in tenants])
+    if selected is None: return
+    m3u_url = ask("URL M3U autorizada (não será armazenada)", password=True)
+    if m3u_url is None: return
+    try:
+        discovery = discover_xui_media(m3u_url)
+        if not confirm(
+            f"Amostras aprovadas: {discovery.sampled_live} live + {discovery.sampled_vod} VOD.\n"
+            f"Novo mapa: {len(discovery.load_balancers)} LB + {len(discovery.vod_seeds)} seed VOD.\n\n"
+            "O tenant será fechado durante a troca e só voltará após TLS, deploy, health e DNS.\n\n"
+            "Aplicar a ressincronização?"
+        ):
+            return
+        onboarding = TenantOnboardingService(db).resync(
+            selected, discovery.load_balancers, discovery.vod_seeds,
+        )
+        message(
+            f"M3U do {selected} ressincronizada com segurança.\n\n"
+            f"Estado: {onboarding['state']}\n"
+            f"Mapa aplicado: {len(discovery.load_balancers)} LB + {len(discovery.vod_seeds)} seed VOD.\n"
+            "O worker executará automaticamente os gates antes de republicar o tenant."
+        )
+    except (CloudflareError, ValueError) as exc:
+        message(f"Ressincronização recusada; o mapa anterior permaneceu intacto.\n\n{exc}")
+
+
 def tenants_menu(db: Database) -> None:
     while True:
         action = choose("XUIs e domínios — nova arquitetura", [
@@ -852,6 +880,7 @@ def tenants_menu(db: Database) -> None:
             ("2", "Cadastrar novo XUI/tenant"),
             ("3", "Adicionar domínio alternativo (CNAME)"),
             ("4", "Visualizar configuração Nginx gerada"),
+            ("5", "Ressincronizar M3U autorizada"),
             ("0", "Voltar"),
         ])
         try:
@@ -860,6 +889,7 @@ def tenants_menu(db: Database) -> None:
             elif action == "2": tenant_add(db)
             elif action == "3": tenant_cname(db)
             elif action == "4": tenant_vhost(db)
+            elif action == "5": tenant_resync_m3u(db)
         except Exception as exc: message("Falha na operação de tenant:\n\n" + str(exc))
 
 

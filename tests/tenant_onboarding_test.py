@@ -47,6 +47,19 @@ class TenantOnboardingTest(unittest.TestCase):
         self.assertEqual((self.db.tenant_onboarding("newxui") or {})["state"], "rolled_back")
         self.assertEqual(calls, ["tls", "deploy", "dns"])
 
+    def test_resync_replaces_only_media_map_and_reopens_onboarding(self) -> None:
+        self.service.register("newxui", "New XUI", "newxui.test", "origin.example.com",
+                              load_balancers=("old-lb.test",), vod_seeds=("old-vod.test",))
+        self.db.set_tenant_enabled("newxui", True, operator="test", reason="fixture")
+        self.db.update_tenant_onboarding("newxui", "committed", reason="fixture publicado")
+        result = self.service.resync("newxui", ("new-lb.test",), ("new-vod.test",))
+        self.assertEqual(result["state"], "pending")
+        tenant = self.db.tenant("newxui")
+        self.assertEqual(tenant["enabled"], 0)
+        self.assertEqual({(u["kind"], u["host"]) for u in tenant["upstreams"]},
+                         {("origin", "origin.example.com"), ("lb", "new-lb.test"),
+                          ("vod", "new-vod.test")})
+
 
 if __name__ == "__main__":
     unittest.main()

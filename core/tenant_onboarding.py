@@ -32,6 +32,21 @@ class TenantOnboardingService:
             reason="tenant criado sem publicação pública",
         )
 
+    def resync(self, tenant_id: str, load_balancers: tuple[str, ...],
+               vod_seeds: tuple[str, ...]) -> dict[str, Any]:
+        """Reabre uma publicação somente depois de substituir o mapa de mídia."""
+        current = self.db.tenant_onboarding(tenant_id)
+        if current and current["state"] in {"pending", "staging", "verifying"}:
+            raise ValueError("já existe uma operação de onboarding em andamento")
+        self.db.replace_media_upstreams(
+            tenant_id, load_balancers, vod_seeds,
+            operator=self.operator, reason="M3U autorizada ressincronizada",
+        )
+        return self.db.begin_tenant_onboarding(
+            tenant_id, operator=self.operator,
+            reason="mapa de mídia atualizado por M3U autorizada",
+        )
+
     def execute(self, tenant_id: str, *, stage_tls: Callable[[], Any],
                 deploy: Callable[[], Any], verify: Callable[[], Any],
                 publish_dns: Callable[[], Any], rollback_tls: Callable[[], Any] | None = None) -> dict[str, Any]:

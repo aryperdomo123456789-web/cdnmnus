@@ -848,6 +848,36 @@ class Database:
             db.execute("UPDATE xui_tenants SET config_version=config_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tenant_id,))
         return next(item for item in self.tenant(tenant_id)["upstreams"] if item["id"] == upstream_id)
 
+    def replace_media_upstreams(self, tenant_id: str, load_balancers: Sequence[str],
+                                vod_seeds: Sequence[str], *, operator: str = "control-plane",
+                                reason: str = "M3U autorizada ressincronizada") -> dict[str, Any]:
+        """Troca somente o mapa descoberto, mantendo a origem intacta e fechando o tenant."""
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        lbs = list(dict.fromkeys(normalize_hostname(item) for item in load_balancers if item.strip()))
+        vod = list(dict.fromkeys(normalize_hostname(item) for item in vod_seeds if item.strip()))
+        if not lbs or not vod:
+            raise ValueError("a ressincronização exige ao menos um LB e um seed VOD")
+        operator = re.sub(r"[^a-zA-Z0-9_.@-]", "_", operator.strip())[:128]
+        reason = str(_sanitized_event_payload(reason.strip())).replace("\n", " ")[:512]
+        with self.transaction(immediate=True) as db:
+            if db.execute("SELECT 1 FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone() is None:
+                raise ValueError("tenant não encontrado")
+            db.execute("DELETE FROM tenant_upstreams WHERE tenant_id=? AND kind IN ('lb','vod')", (tenant_id,))
+            for host in lbs:
+                db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,80)",
+                           (f"lb-{tenant_id}-{uuid.uuid4().hex[:10]}", tenant_id, "lb", host))
+            for host in vod:
+                db.execute("INSERT INTO tenant_upstreams(id,tenant_id,kind,host,port) VALUES(?,?,?,?,80)",
+                           (f"vod-{tenant_id}-{uuid.uuid4().hex[:10]}", tenant_id, "vod", host))
+            db.execute("UPDATE xui_tenants SET enabled=0,config_version=config_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (tenant_id,))
+            db.execute(
+                "INSERT INTO tenant_events(id,tenant_id,event_type,operator,reason,payload_sanitized) VALUES(?,?,?,?,?,?)",
+                ("tenant-evt-" + uuid.uuid4().hex, tenant_id, "media_upstreams_replaced", operator, reason,
+                 json.dumps({"load_balancers": len(lbs), "vod_seeds": len(vod)}, sort_keys=True)),
+            )
+        return self.tenant(tenant_id)
+
     def update_upstream(self, upstream_id: str, host: str, port: int = 80) -> dict[str, Any]:
         host = normalize_origin_host(host); port = normalize_port(port)
         with self.transaction(immediate=True) as db:
