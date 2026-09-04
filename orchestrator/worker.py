@@ -22,7 +22,7 @@ from core.deploy import queue_deployment
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker Ansible desacoplado cdnmnus")
-    parser.add_argument("--db", default=os.environ.get("CDNMNUS_ADMIN_DB", "/etc/cdnmnus/admin.db"))
+    parser.add_argument("--db", default=os.environ.get("CDNMNUS_ADMIN_DB", "/var/lib/cdnmnus-admin/admin.db"))
     parser.add_argument("--playbook", default="ansible/playbooks/deploy-and-activate-edge.yml")
     parser.add_argument("--tls-job-timeout-seconds", type=int,
                         default=int(os.environ.get("CDNMNUS_TLS_JOB_TIMEOUT_SECONDS", "1800")))

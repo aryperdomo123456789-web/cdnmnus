@@ -61,6 +61,11 @@
              | selectattr('value.vod_hosts', 'defined')
              | rejectattr('value.vod_hosts', 'equalto', [])
              | map(attribute='key') | list }}
+        audit_playback_tenants: >-
+          {{ ((audit_snapshot_raw.content | b64decode | from_json).tenants | dict2items)
+             | selectattr('value.playback_sessions_v1', 'defined')
+             | selectattr('value.playback_sessions_v1', 'equalto', true)
+             | map(attribute='value') | list }}
 
     - name: Recusar release sem hostname público auditável
       ansible.builtin.assert:
@@ -110,6 +115,32 @@
           - "https://{{ item }}/edge-health"
       loop: "{{ audit_health_hosts }}"
       changed_when: false
+
+    - name: Provar que a rota de playback está publicada nesta release
+      ansible.builtin.shell: >-
+        curl --silent --show-error --output /dev/null --write-out '%{http_code}'
+        --resolve {{ item.public_hosts[0] }}:443:127.0.0.1
+        --max-time 5
+        "https://{{ item.public_hosts[0] }}/playback/live/ps-00000000000000000000000000000000?token=invalid&channel_id=probe"
+      register: playback_route_probe
+      changed_when: false
+      failed_when: playback_route_probe.stdout | trim != '403'
+      loop: "{{ audit_playback_tenants }}"
+      loop_control:
+        label: "{{ item.public_hosts[0] }}"
+
+    - name: Provar que a rota de telemetria está publicada nesta release
+      ansible.builtin.shell: >-
+        curl --silent --show-error --output /dev/null --write-out '%{http_code}'
+        --resolve {{ item.public_hosts[0] }}:443:127.0.0.1
+        --max-time 5
+        "https://{{ item.public_hosts[0] }}/api/playback/sessions/ps-00000000000000000000000000000000/events"
+      register: playback_events_probe
+      changed_when: false
+      failed_when: playback_events_probe.stdout | trim != '403'
+      loop: "{{ audit_playback_tenants }}"
+      loop_control:
+        label: "{{ item.public_hosts[0] }}"
 
     - name: Expor identidade comprovada da edge
       ansible.builtin.debug:

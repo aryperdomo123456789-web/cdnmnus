@@ -6,6 +6,13 @@
 playlist que contêm usuário/senha em URLs públicas com token opaco, mantendo
 vários XUIs isolados e a abertura dos conteúdos rápida.
 
+**Importante:** um CNAME externo pode ser protegido sem ser conhecido como
+alias no banco, desde que termine em um `canonical_host` habilitado. Isso é o
+fluxo DNS descrito em `RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md`. Não confunda
+essa descoberta com a emissão de token opaco: o alias pode estar protegido
+hoje, enquanto a saída pública `/play/<token>/m3u8` continua sendo uma etapa
+posterior até passar todos os gates abaixo.
+
 Este documento é uma receita de implementação. Ele descreve o estado real do
 código, a mudança necessária e a ordem segura para colocá-la em produção.
 Não pule etapas. Se um teste falhar, mantenha o fluxo antigo ativo e faça

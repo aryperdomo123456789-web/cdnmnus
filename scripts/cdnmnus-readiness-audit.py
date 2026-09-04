@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,28 @@ def check(name: str, ok: bool, detail: str, blockers: list[str]) -> dict[str, ob
     if not ok:
         blockers.append(f"{name}: {detail}")
     return {"name": name, "ok": ok, "detail": detail}
+
+
+def valid_promotion_locks(db: Database) -> list[dict[str, object]]:
+    """Return only current locks held by an LB with a positive fence token."""
+    now = datetime.now(timezone.utc)
+    valid: list[dict[str, object]] = []
+    for lock in db.rows("SELECT * FROM promotion_locks"):
+        try:
+            expires_at = datetime.fromisoformat(str(lock["expires_at"]).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        holder = db.rows("SELECT role FROM nodes WHERE id=?", (lock["holder_node_id"],))
+        if (expires_at > now and holder and holder[0]["role"] == "load_balancer"
+                and int(lock["fencing_token"]) > 0):
+            valid.append(dict(lock))
+    return valid
+
+
+def external_fencing_is_verified(db: Database) -> bool:
+    """Require an explicit, independently verified provider declaration."""
+    value = db.setting("external_fencing_provider")
+    return isinstance(value, dict) and value.get("enabled") is True and value.get("verified") is True
 
 
 def main() -> int:
@@ -57,8 +80,11 @@ def main() -> int:
                        "load_balancers registrados", blockers))
     gates.append(check("lb-backends", len(db.rows("SELECT * FROM lb_backends WHERE state='enabled'")) >= len(ready),
                        "backends enabled coerentes", blockers))
-    gates.append(check("promotion-lock", bool(db.rows("SELECT * FROM promotion_locks")),
-                       "lease/fencing ainda não registrado", blockers))
+    locks = valid_promotion_locks(db)
+    gates.append(check("promotion-lock", bool(locks),
+                       "lease ausente, expirado ou sem titular/token válidos", blockers))
+    gates.append(check("external-fencing", external_fencing_is_verified(db),
+                       "fencing externo não foi verificado", blockers))
     gates.append(check("capacity-profiles", len(db.rows("SELECT * FROM node_capacity_profiles")) >= len(lbs),
                        "perfil contratado de todos os LBs", blockers))
 

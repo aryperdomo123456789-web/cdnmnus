@@ -94,6 +94,9 @@ with tempfile.TemporaryDirectory() as temp_name:
     assert onboarding_hosts["bootstrap1"]["cdnmnus_node_state"] == "ready"
 
     rollback_tasks = TENANT_TASKS.read_text(encoding="utf-8")
+    cname_gateway_block = rollback_tasks[rollback_tasks.index("Instalar gateway padrão de descoberta CNAME"):]
+    assert cname_gateway_block.count('location ~ "^/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?$"') == 2
+    assert 'location / { return 421; }' in cname_gateway_block
     assert "Preservar conteúdo das units anteriores para rollback" in rollback_tasks
     assert "Restaurar conteúdo das units que existiam" in rollback_tasks
     assert "Distribuir fullchain TLS para cada hostname publicado" in TENANT_TASKS.read_text()

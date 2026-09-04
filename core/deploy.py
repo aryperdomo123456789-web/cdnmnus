@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 from contextlib import closing
@@ -109,9 +110,74 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
     if not tenants:
         raise ValueError("nenhum tenant habilitado")
     generation = max(int(item["config_version"]) for item in tenants)
-    rendered = render_all(tenants)
+    broker_tenants = []
+    capacity_rows = []
+    capacity_by_host: dict[str, dict[str, Any]] = {}
+    try:
+        from core.topology import TopologyStore
+        with db.connect() as connection:
+            has_topology = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_capacity_runtime'"
+            ).fetchone()
+            lb_endpoints = {}
+            if has_topology:
+                lb_endpoints = {
+                    str(row["node_id"]): str(row["public_endpoint"]).strip().lower()
+                    for row in connection.execute(
+                        "SELECT node_id, public_endpoint FROM load_balancers WHERE public_endpoint IS NOT NULL"
+                    ).fetchall()
+                    if row["public_endpoint"]
+                }
+        if has_topology:
+            capacity_rows = TopologyStore(db).capacity_snapshot()
+            for row in capacity_rows:
+                node_id = str((row.get("node") or {}).get("id") or "")
+                endpoint = lb_endpoints.get(node_id)
+                if endpoint:
+                    capacity_by_host[endpoint] = row
+    except (ImportError, OSError, RuntimeError, ValueError, sqlite3.Error):
+        # Older installations may not have topology tables yet. The legacy
+        # load-balancer candidates remain the safe compatibility fallback.
+        capacity_rows = []
+    for row in capacity_rows:
+        node = row.get("node") or {}
+        for key in (node.get("id"), node.get("ipv4")):
+            if key:
+                capacity_by_host[str(key).strip().lower()] = row
+    for tenant in tenants:
+        item = dict(tenant)
+        # Opt-in for providers whose download response is an attachment and
+        # bypasses Nginx gzip when handled directly with sub_filter.
+        if db.setting(f"tenant_playlist_broker:{tenant['id']}", False):
+            item["playlist_broker_enabled"] = True
+        host_header = db.setting(f"tenant_origin_host_header:{tenant['id']}")
+        if host_header:
+            item["origin_host_header"] = str(host_header)
+        if db.setting(f"tenant_live_redirect_passthrough:{tenant['id']}", False):
+            item["live_redirect_passthrough"] = True
+        playback_edges = []
+        for upstream in tenant.get("upstreams", []):
+            if upstream.get("kind") != "lb":
+                continue
+            host = str(upstream["host"]).strip().lower()
+            capacity = capacity_by_host.get(host, {})
+            node = capacity.get("node") or {}
+            runtime = capacity.get("runtime") or {}
+            playback_edges.append({
+                "id": str(node.get("id") or host),
+                "host": host,
+                "state": str(runtime.get("state") or node.get("state") or "ready"),
+                "last_health_status": node.get("last_health_status"),
+                "last_health_at": node.get("last_health_at"),
+                "pressure": capacity.get("pressure") or 0.0,
+                "weight": int(runtime.get("applied_weight") or runtime.get("desired_weight") or 100),
+            })
+        if playback_edges:
+            item["playback_edges"] = playback_edges
+        broker_tenants.append(item)
+    rendered = render_all(broker_tenants)
     snapshot = broker_snapshot(
-        tenants,
+        broker_tenants,
         generation,
         automatic_cname_discovery=bool(db.setting("automatic_cname_discovery", False)),
     )
@@ -146,6 +212,11 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
             "runtime/cname_gateway.py": project_root / "panel/cname_gateway.py",
             "runtime/cname_discovery.py": project_root / "core/cname_discovery.py",
             "runtime/m3u_transform.py": project_root / "core/m3u_transform.py",
+            "runtime/playlist_tokens.py": project_root / "core/playlist_tokens.py",
+            "runtime/playback/__init__.py": project_root / "playback/__init__.py",
+            "runtime/playback/session_store.py": project_root / "playback/session_store.py",
+            "runtime/playback/route_policy.py": project_root / "playback/route_policy.py",
+            "runtime/playback/token.py": project_root / "playback/token.py",
             "runtime/cdnmnus-tenant-broker@.service": project_root / "panel/cdnmnus-tenant-broker@.service",
             "runtime/cdnmnus-vod-relay@.service": project_root / "panel/cdnmnus-vod-relay@.service",
             "runtime/cdnmnus-cname-gateway.service": project_root / "panel/cdnmnus-cname-gateway.service",
@@ -155,6 +226,7 @@ def build_release(db: Database, release_root: str | Path = "/var/lib/cdnmnus-adm
                 raise FileNotFoundError(f"artefato obrigatório do runtime ausente: {source}")
             content = source.read_bytes()
             destination = temp / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
             os.chmod(destination, 0o640)
             hashes[relative] = hashlib.sha256(content).hexdigest()

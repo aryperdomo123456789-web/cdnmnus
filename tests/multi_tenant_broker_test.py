@@ -8,7 +8,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-_env = {key: os.environ.get(key) for key in ("CDNMNUS_TENANT_ID", "CDNMNUS_TENANTS_CONFIG", "CDNMNUS_BROKER_SOCKET")}
+_env = {key: os.environ.get(key) for key in (
+    "CDNMNUS_TENANT_ID", "CDNMNUS_TENANTS_CONFIG", "CDNMNUS_BROKER_SOCKET", "CDNMNUS_PLAYBACK_STORE",
+    "CDNMNUS_PLAYLIST_TOKEN_STORE",
+)}
 
 try:
     with tempfile.TemporaryDirectory() as root:
@@ -20,11 +23,14 @@ try:
                 "origin": {"host": "origin.test", "port": 80},
                 "load_balancers": [{"host": "lb.test", "port": 80}],
                 "vod_hosts": [{"host": "vod.test", "port": 80}], "ttl_seconds": 15,
+                "playback_sessions_v1": 1,
             }},
         }))
         os.environ["CDNMNUS_TENANT_ID"] = "xui1"
         os.environ["CDNMNUS_TENANTS_CONFIG"] = str(snapshot)
         os.environ["CDNMNUS_BROKER_SOCKET"] = str(Path(root) / "broker.sock")
+        os.environ["CDNMNUS_PLAYBACK_STORE"] = str(Path(root) / "playback.db")
+        os.environ["CDNMNUS_PLAYLIST_TOKEN_STORE"] = str(Path(root) / "playlist-tokens.db")
         spec = importlib.util.spec_from_file_location("multi_tenant_broker", "panel/multi_tenant_broker.py")
         module = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
@@ -32,6 +38,7 @@ try:
         spec.loader.exec_module(module)
         config = module.STATE.load()
         assert config["origin_host"] == "origin.test" and config["load_balancers"] == ["lb.test"]
+        assert str(module.STATE.playlist_tokens.path) == str(Path(root) / "playlist-tokens.db")
         module.STATE.validate_request("xui1", "alias.test")
         for tenant, host in (("xui2", "alias.test"), ("xui1", "other.test")):
             try:
@@ -44,6 +51,8 @@ try:
         module.legacy.query_origin = lambda uri, cfg: "/__cdnmnus_resolved_origin/segment.ts"
         module.STATE.state.cache.clear()
         assert module.STATE.resolve("/hls/other.ts", False, False) == "/__cdnmnus_xui1_origin/segment.ts"
+        playback = module.STATE.create_playback_session({"channel_id": "canal-1", "media_type": "live"})
+        assert playback["tenant_id"] == "xui1" and playback["edge_id"] == "lb.test"
 finally:
     for key, value in _env.items():
         if value is None:

@@ -136,7 +136,7 @@ def config_port(args: argparse.Namespace, db: Database) -> None:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="admin", description="Administração local cdnmnus")
-    root.add_argument("--db", default=os.environ.get("CDNMNUS_ADMIN_DB", "/etc/cdnmnus/admin.db"))
+    root.add_argument("--db", default=os.environ.get("CDNMNUS_ADMIN_DB", "/var/lib/cdnmnus-admin/admin.db"))
     commands = root.add_subparsers(dest="area", required=True)
     edge = commands.add_parser("edge").add_subparsers(dest="command", required=True)
     add = edge.add_parser("add")

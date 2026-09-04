@@ -1,7 +1,37 @@
 # Receita: CNAME automatico por tenant e playlist publica
 
-**Estado:** especificacao de implementacao. A existencia desta receita nao
-significa que o recurso esteja ativo.
+**Estado:** implementado no release gerenciado atual. Esta receita descreve o
+fluxo que deve ser instalado e validado; ela nao substitui os gates de TLS,
+health e laboratorio.
+
+## 0. Receita curta para uma instalação nova
+
+Use sempre esta ordem. O alias externo nao precisa ser gravado em
+`tenant_hosts`.
+
+1. Instale uma release que contenha `core/cname_discovery.py`,
+   `panel/cname_gateway.py` e a role `cdn_tenants`.
+2. Cadastre o XUI com um `canonical_host` unico, seus upstreams autorizados e
+   o certificado desse hostname. Nunca cadastre o IP do XUI como hostname
+   publico.
+3. Confirme `automatic_cname_discovery=true` nas edges e execute `nginx -t`,
+   reload controlado e `GET /edge-health` em cada edge.
+4. No provedor DNS do cliente, crie somente:
+   `alias.cliente.tld CNAME canonical.phpd77.com` em modo DNS-only.
+5. Para HTTPS, emita/distribua um certificado cujo SAN contenha o alias. Sem
+   SAN, aceite apenas HTTP de laboratorio ou termine TLS no provedor externo.
+6. Teste API, M3U, live, filme, série e `Range` pelo alias. Só considere
+   operacional depois de todos os checks passarem.
+
+Exemplos atuais:
+
+```text
+on.acxxl.com       CNAME xuilab.phpd77.com
+novo.exemplo.tld   CNAME turbotv.phpd77.com
+```
+
+O sistema conhece `xuilab.phpd77.com` e `turbotv.phpd77.com` como tenants
+canônicos, mas não precisa conhecer `on.acxxl.com` ou `novo.exemplo.tld`.
 
 ## 1. Resultado esperado
 
@@ -31,7 +61,8 @@ Ja existem:
 
 - `core/db.py`: `tenant_hosts`, `add_cname()` e upstreams por tenant;
 - `core/render_tenants.py`: vhosts, brokers, relay VOD e rotas por tenant;
-- `core/deploy.py`: `external_alias_tenant_id` e fallback global;
+- `core/cname_discovery.py`: resolve a cadeia CNAME e seleciona o tenant;
+- `panel/cname_gateway.py`: gateway por socket, rotas permitidas e `421`;
 - `panel/multi_tenant_broker.py`: broker separado por socket/tenant;
 - `panel/vod_relay.py`: redirects VOD, portas, DNS publico e Range;
 - `core/dns_reconciler.py`: reconciliacao Cloudflare;
@@ -42,14 +73,15 @@ As receitas `CNAME_DNS_ONLY_AND_LAB_RECIPE.md`,
 `TOKEN_LIFECYCLE_AND_ORIGIN_SHIELD.md` cobrem alias conhecido, relay VOD e
 protecao da origem.
 
-Ainda falta o resolvedor:
+O fluxo efetivo agora e:
 
 ```text
-Host desconhecido -> cadeia CNAME -> canonical -> tenant
+Host desconhecido -> cadeia CNAME -> canonical -> tenant_id -> socket isolado
 ```
 
-O fallback atual e global e usa um unico `external_alias_tenant_id`; nao serve
-com seguranca varios XUIs. O Nginx tambem nao deve usar `$host` em `proxy_pass`.
+O fallback global legado nao deve ser usado para novos tenants. O Nginx nunca
+usa `$host` em `proxy_pass`; a autoridade recebida serve apenas para a
+descoberta validada.
 
 ## 3. Politica de confianca
 
@@ -71,7 +103,7 @@ cadeia circular, rota administrativa, prefixo `__cdnmnus_` publico ou metodo
 nao permitido. Nunca usar query string, cookie, referer ou header do cliente
 como destino ou identidade de tenant.
 
-## 4. Arquitetura recomendada
+## 4. Arquitetura efetiva
 
 Nao implementar:
 
@@ -83,7 +115,7 @@ proxy_pass http://$request_uri;
 
 Isso cria proxy aberto, permite SSRF e pode misturar tenants.
 
-Criar um gateway interno dedicado:
+O gateway interno dedicado ja e instalado pela role:
 
 ```text
 cliente -> Nginx TLS/limites -> Unix socket cname-gateway
@@ -101,7 +133,7 @@ uma release. O alias so fica ativo apos `nginx -t`, reload, health e teste real.
 
 ## 5. Contrato do resolvedor
 
-Criar `core/cname_discovery.py` com funcao equivalente a:
+`core/cname_discovery.py` implementa uma funcao equivalente a:
 
 ```python
 discover_alias(host, tenant_index, resolver, now) -> DiscoveryResult
@@ -185,34 +217,31 @@ criar CNAME DNS-only, emitir TLS e iniciar release. Em zona externa, como
 `acxxl.com`, o proprietario cria o CNAME; o sistema nao deve fingir controlar
 essa zona.
 
-## 9. Implementacao por fases
+## 9. Evolucao segura
 
-### Fase A: descoberta
+### Fase A: recurso existente
 
-Criar `core/cname_discovery.py` e `tests/cname_discovery_test.py` para alias
-valido de cada tenant, ordem diferente de tenants, loop, IP privado, erro DNS,
-terminal duplicado, TTL, expiracao, troca de destino e tenant desabilitado.
-
-### Fase B: transformador
-
-Criar transformador testavel para URLs M3U absolutas/relativas, live, movie,
-series, HTTP/HTTPS, portas, origem, LB, VOD e host estranho.
-
-### Fase C: gateway
-
-Implementar socket interno, allowlist de metodos/caminhos, limites, timeout,
-retry unico antes do primeiro byte, isolamento por tenant e logs sanitizados.
-
-### Fase D: renderer
-
-Adicionar o gateway sem remover vhosts canonicos. Manter aliases conhecidos no
-fluxo atual e habilitar descoberta por flag inicialmente desligada:
+Nao recrie os componentes acima. A suite `tests/cname_discovery_test.py` deve
+passar antes de qualquer rollout. A descoberta permanece protegida por flag:
 
 ```text
-automatic_cname_discovery = false
+automatic_cname_discovery = true
 ```
 
-### Fase E: menu
+Em canário, a flag pode ficar `false` até a release passar pelos gates. Em
+produção, `false` é somente rollback: ele faz aliases desconhecidos voltarem a
+`421`; não use fallback global para “fazer funcionar”.
+
+### Fase B: evolucao de token
+
+O formato legado reescrito para o canonical protege a origem, mas ainda pode
+conter credenciais no caminho interno da URL. A transformacao para
+`/play/<token>/m3u8` e uma mudanca separada, descrita em
+`RECIPE_CERTIFICATES_OPAQUE_PLAY_TOKENS_MULTI_XUI_CACHE.md`; nao a marque como
+implantada enquanto o manifesto real nao passar pelo gate de ausencia de
+usuario, senha, IP e host upstream.
+
+### Fase C: menu
 
 Adicionar `Validar CNAME`, `Mostrar tenant`, `Publicar CNAME`, `Emitir TLS`,
 `Testar playback` e `Revogar cache`. Publicacao Cloudflare exige zona
@@ -245,5 +274,6 @@ alias desconhecido -> 421
 alias cadastrado e validado -> fluxo protegido
 ```
 
-O recurso nao deve ser implementado removendo o `421` do vhost default. A
-prova DNS, a selecao por tenant e a transformacao da playlist sao obrigatorias.
+O recurso nao deve ser habilitado removendo o `421` do vhost default. A prova
+DNS e a selecao por tenant sao obrigatorias. A transformacao para token opaco
+tem gate proprio e nao pode ser inferida apenas porque o CNAME funcionou.

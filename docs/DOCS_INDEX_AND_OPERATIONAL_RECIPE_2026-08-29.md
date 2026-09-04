@@ -32,6 +32,8 @@ Leia primeiro estes documentos, nesta ordem:
 14. [runbooks/tls_tenant_distribution.md](runbooks/tls_tenant_distribution.md)
 15. [DOMAIN_CLOUDFLARE_MIGRATION_AND_MULTI_EDGE_RECIPE.md](DOMAIN_CLOUDFLARE_MIGRATION_AND_MULTI_EDGE_RECIPE.md)
 16. [RECEITA_FAILOVER_MANUAL_SEGURO_MENU_SSH_2026-09-02.md](RECEITA_FAILOVER_MANUAL_SEGURO_MENU_SSH_2026-09-02.md)
+17. [RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md](RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md)
+18. [CNAME_DNS_ONLY_AND_LAB_RECIPE.md](CNAME_DNS_ONLY_AND_LAB_RECIPE.md)
 
 Esses documentos cobrem:
 
@@ -41,6 +43,7 @@ Esses documentos cobrem:
 - contrato de DNS-only e R2 separado;
 - validação real de players e laboratório local;
 - relay privado VOD e contratos de segurança.
+- descoberta automática de CNAME externo sem cadastro do alias.
 
 ## 2. Documentos de execução por frente
 
@@ -109,6 +112,8 @@ Ordem recomendada de execução:
 7. Configurar o token mínimo e as zonas autorizadas seguindo
    [CLOUDFLARE_API_AUTOMATION_RECIPE.md](CLOUDFLARE_API_AUTOMATION_RECIPE.md).
 8. Reconciliar Cloudflare e executar o laboratório CNAME antes de publicar novos aliases.
+9. Para cada novo alias externo, seguir `RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md`;
+   para a prova de aplicação, executar também `CNAME_DNS_ONLY_AND_LAB_RECIPE.md`.
 
 ## 4. Laboratório de testes
 

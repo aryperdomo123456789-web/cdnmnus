@@ -2,6 +2,16 @@
 
 **Estado real de referência:** [STATE_REAL_2026-08-29.md](STATE_REAL_2026-08-29.md)
 
+## Limite operacional importante
+
+O CNAME desconhecido e a proteção da origem já possuem fluxo próprio: o
+gateway descobre um alias externo pela cadeia DNS, associa-o ao canonical
+habilitado e encaminha pelo socket do tenant. Isso não significa que o
+manifesto legado já tenha sido convertido em token opaco. Atualmente, a
+proteção de origem e a transformação `/play/<token>/m3u8` são gates diferentes;
+consulte `RECIPE_AUTOMATIC_CNAME_TENANT_DISCOVERY.md` para CNAME e a receita de
+certificados para token opaco.
+
 ## Estado atual do tenant tvbrasil
 
 O XUI `38.46.223.77` pode emitir dois formatos de playlist. No formato

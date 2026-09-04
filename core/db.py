@@ -145,6 +145,7 @@ class Database:
                     canonical_host TEXT NOT NULL UNIQUE,
                     health_host TEXT,
                     playlist_host TEXT,
+                    playback_sessions_v1 INTEGER NOT NULL DEFAULT 0 CHECK(playback_sessions_v1 IN (0,1)),
                     config_version INTEGER NOT NULL DEFAULT 1,
                     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -342,6 +343,9 @@ class Database:
             if "playlist_host" not in tenant_columns:
                 db.execute("ALTER TABLE xui_tenants ADD COLUMN playlist_host TEXT")
                 db.execute("UPDATE xui_tenants SET playlist_host=canonical_host WHERE playlist_host IS NULL")
+            if "playback_sessions_v1" not in tenant_columns:
+                db.execute("ALTER TABLE xui_tenants ADD COLUMN playback_sessions_v1 INTEGER NOT NULL DEFAULT 0")
+                db.execute("UPDATE xui_tenants SET playback_sessions_v1=0 WHERE playback_sessions_v1 IS NULL")
             tls_job_columns = {row[1] for row in db.execute("PRAGMA table_info(tls_jobs)").fetchall()}
             if "lease_id" not in tls_job_columns:
                 db.execute("ALTER TABLE tls_jobs ADD COLUMN lease_id TEXT")
@@ -388,8 +392,8 @@ class Database:
         vod = list(dict.fromkeys(normalize_hostname(item) for item in vod_seeds if item.strip()))
         with self.transaction(immediate=True) as db:
             db.execute(
-                "INSERT INTO xui_tenants(id,name,canonical_host,health_host,playlist_host,enabled) VALUES(?,?,?,?,?,?)",
-                (tenant_id, name.strip(), canonical_host, canonical_host, canonical_host, int(bool(enabled))),
+                "INSERT INTO xui_tenants(id,name,canonical_host,health_host,playlist_host,playback_sessions_v1,enabled) VALUES(?,?,?,?,?,?,?)",
+                (tenant_id, name.strip(), canonical_host, canonical_host, canonical_host, 0, int(bool(enabled))),
             )
             db.execute("INSERT INTO tenant_hosts(hostname,tenant_id,is_canonical) VALUES(?,?,1)",
                        (canonical_host, tenant_id))
@@ -536,11 +540,12 @@ class Database:
 
             db.execute(
                 """INSERT INTO xui_tenants
-                   (id,name,canonical_host,health_host,playlist_host,config_version,enabled,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                   (id,name,canonical_host,health_host,playlist_host,playback_sessions_v1,config_version,enabled,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
                 (new_id, source["name"], canonical_host,
                  source["health_host"] or canonical_host,
                  source["playlist_host"] or canonical_host,
+                 int(source["playback_sessions_v1"] or 0),
                  int(source["config_version"]) + 1, source["enabled"], source["created_at"]),
             )
             db.execute("UPDATE tenant_hosts SET tenant_id=?,is_canonical=CASE WHEN hostname=? THEN 1 ELSE 0 END WHERE tenant_id=?",
@@ -775,6 +780,28 @@ class Database:
                 raise ValueError("host de playlist deve pertencer ao tenant")
             db.execute("UPDATE xui_tenants SET playlist_host=?,config_version=config_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                        (hostname, tenant_id))
+        return self.tenant(tenant_id)
+
+    def set_playback_sessions_enabled(self, tenant_id: str, enabled: bool, *, operator: str = "control-plane",
+                                      reason: str = "playback_sessions_v1 toggled") -> dict[str, Any]:
+        tenant_id = normalize_id(tenant_id, "tenant_id")
+        operator = re.sub(r"[^a-zA-Z0-9_.@-]", "_", operator.strip())[:128]
+        reason = str(_sanitized_event_payload(reason.strip())).replace("\n", " ")[:512]
+        if not operator or not reason:
+            raise ValueError("operador e motivo são obrigatórios")
+        with self.transaction(immediate=True) as db:
+            row = db.execute("SELECT playback_sessions_v1 FROM xui_tenants WHERE id=?", (tenant_id,)).fetchone()
+            if row is None:
+                raise ValueError("tenant não encontrado")
+            db.execute(
+                "UPDATE xui_tenants SET playback_sessions_v1=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (int(bool(enabled)), tenant_id),
+            )
+            db.execute(
+                "INSERT INTO tenant_events(id,tenant_id,event_type,operator,reason,payload_sanitized) VALUES(?,?,?,?,?,?)",
+                ("tenant-evt-" + uuid.uuid4().hex, tenant_id, "playback_sessions_toggled", operator, reason,
+                 json.dumps({"old": bool(row["playback_sessions_v1"]), "new": bool(enabled)}, sort_keys=True)),
+            )
         return self.tenant(tenant_id)
 
     def switch_managed_domain(self, domain: str) -> dict[str, Any]:

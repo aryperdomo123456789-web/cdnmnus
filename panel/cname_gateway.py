@@ -20,9 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from core.cname_discovery import DiscoveryError, build_tenant_index, discover_alias, normalize_discovery_host, system_resolver
     from core.m3u_transform import rewrite_public_playlist, sanitize_response_headers
+    from core.playlist_tokens import PlaylistTokenStore
 except ImportError:
     from cname_discovery import DiscoveryError, build_tenant_index, discover_alias, normalize_discovery_host, system_resolver
     from m3u_transform import rewrite_public_playlist, sanitize_response_headers
+    from playlist_tokens import PlaylistTokenStore
 import token_broker
 
 SNAPSHOT_PATH = Path(os.environ.get("CDNMNUS_TENANTS_CONFIG", "/opt/cdnmnus/current/broker/tenants.json"))
@@ -84,6 +86,10 @@ class GatewayState:
         self.index = {}
         self.cache: dict[str, object] = {}
         self.lock = threading.RLock()
+        self.playlist_tokens = PlaylistTokenStore(
+            os.environ.get("CDNMNUS_PLAYLIST_TOKEN_STORE", "/run/cdnmnus/playlist-tokens.db")
+        )
+        self.playlist_tokens.initialize()
 
     def load(self) -> dict[str, object]:
         stat = SNAPSHOT_PATH.stat()
@@ -126,7 +132,7 @@ class GatewayState:
         item = self.snapshot.get("tenants", {}).get(tenant_id)
         if not isinstance(item, dict):
             raise GatewayError("tenant ausente")
-        return item
+        return dict(item, tenant_id=tenant_id)
 
 
 STATE = GatewayState()
@@ -144,10 +150,12 @@ def _tenant_snapshot(tenant: dict[str, object], canonical: str) -> dict[str, obj
     if not isinstance(origin, dict) or not origin.get("host"):
         raise GatewayError("origem do tenant ausente")
     return {
+        "tenant_id": str(tenant.get("tenant_id") or tenant.get("id") or ""),
         "canonical_host": canonical,
         "origin_host": str(origin["host"]),
         "load_balancers": tenant.get("load_balancers", []),
         "vod_hosts": tenant.get("vod_hosts", []),
+        "playlist_broker_enabled": bool(tenant.get("playlist_broker_enabled", False)),
     }
 
 
@@ -210,8 +218,13 @@ def _api(handler: BaseHTTPRequestHandler, tenant: dict[str, object], canonical: 
         response = connection.getresponse()
         if handler.path.split("?", 1)[0] == "/get.php":
             body = _read_limited(response, MAX_PLAYLIST_BYTES)
-            text = body.decode("utf-8", "strict")
-            transformed = rewrite_public_playlist(text, _tenant_snapshot(tenant, canonical), max_bytes=MAX_PLAYLIST_BYTES)
+            transformed = rewrite_public_playlist(
+                body, _tenant_snapshot(tenant, canonical), max_bytes=MAX_PLAYLIST_BYTES,
+                opaque_tokens=bool(tenant.get("playback_sessions_v1", False)
+                                or tenant.get("playlist_broker_enabled", False)),
+                token_store=STATE.playlist_tokens,
+                collect_urls=False,
+            )
             safe = sanitize_response_headers(dict(response.getheaders()))
             handler.send_response(response.status)
             for name, value in safe.items():
@@ -230,9 +243,10 @@ def _api(handler: BaseHTTPRequestHandler, tenant: dict[str, object], canonical: 
         connection.close()
 
 
-def _live(handler: BaseHTTPRequestHandler, tenant: dict[str, object], canonical: str) -> None:
+def _live(handler: BaseHTTPRequestHandler, tenant: dict[str, object], canonical: str,
+          request_path: str | None = None) -> None:
     config = _origin_config(tenant, canonical)
-    internal = token_broker.query_origin(handler.path, config)
+    internal = token_broker.query_origin(request_path or handler.path, config)
     if internal.startswith("/__cdnmnus_resolved_origin"):
         host = str(config["origin_host"]); path = internal[len("/__cdnmnus_resolved_origin"):]; port = 80
     elif internal.startswith("/__cdnmnus_resolved_lb_"):
@@ -249,7 +263,7 @@ def _live(handler: BaseHTTPRequestHandler, tenant: dict[str, object], canonical:
         connection.close()
 
 
-def _vod(handler: BaseHTTPRequestHandler, tenant_id: str) -> None:
+def _vod(handler: BaseHTTPRequestHandler, tenant_id: str, request_path: str | None = None) -> None:
     connection = UnixHTTPConnection(f"/run/cdnmnus/vod-relay-{tenant_id}.sock")
     headers = {"Host": "localhost", "Connection": "close"}
     for name in ("Range", "If-Range", "User-Agent"):
@@ -257,10 +271,23 @@ def _vod(handler: BaseHTTPRequestHandler, tenant_id: str) -> None:
         if value is not None:
             headers[name] = value[:4096]
     try:
-        connection.request(handler.command, handler.path, headers=headers)
+        connection.request(handler.command, request_path or handler.path, headers=headers)
         _proxy_response(handler, connection.getresponse())
     finally:
         connection.close()
+
+
+def _token_path(handler: BaseHTTPRequestHandler, tenant_id: str) -> tuple[str, bool] | None:
+    """Resolve playlist tokens before routing, without exposing their target."""
+    route = urlsplit(handler.path).path
+    if not route.startswith("/play/pt1_"):
+        return None
+    token = route.rsplit("/", 1)[-1]
+    mapping = STATE.playlist_tokens.resolve(token, tenant_id)
+    internal = str(mapping.get("internal_uri", ""))
+    if not internal.startswith(("/hls/", "/live/", "/movie/", "/series/")):
+        raise GatewayError("token aponta para rota não autorizada")
+    return internal, internal.startswith(("/movie/", "/series/"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -290,11 +317,20 @@ class Handler(BaseHTTPRequestHandler):
             decision = STATE.decision(_host_header(self))
             tenant = STATE.tenant(decision.tenant_id or "")
             canonical = decision.canonical_host or ""
+            token_target = _token_path(self, decision.tenant_id or "")
             if route in ("/get.php", "/player_api.php"):
                 _api(self, tenant, canonical)
             elif route.startswith(("/movie/", "/series/")):
                 _vod(self, decision.tenant_id or "")
-            elif route.startswith(("/live/", "/hls/")) or __import__("re").fullmatch(r"/[^/]+/[^/]+/[0-9]+\.m3u8", route):
+            elif token_target is not None:
+                target, is_vod = token_target
+                if is_vod:
+                    _vod(self, decision.tenant_id or "", target)
+                else:
+                    _live(self, tenant, canonical, target)
+            elif (route.startswith(("/live/", "/hls/"))
+                  or __import__("re").fullmatch(r"/[^/]+/[^/]+/[0-9]+\.m3u8", route)
+                  or __import__("re").fullmatch(r"/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?", route)):
                 _live(self, tenant, canonical)
             else:
                 self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "route blocked")

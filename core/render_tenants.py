@@ -57,6 +57,8 @@ def _normalized(tenant: dict[str, Any]) -> dict[str, Any]:
 def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
     cfg = _normalized(tenant)
     tid = cfg["id"]
+    playback_enabled = bool(tenant.get("playback_sessions_v1", 0))
+    playlist_broker_enabled = bool(tenant.get("playlist_broker_enabled", False))
     origin = cfg["origin"]
     canonical = cfg["hosts"][0]
     health_host = cfg["health_host"]
@@ -81,13 +83,62 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
         proxy_hide_header Location;
         proxy_hide_header Server;
     }}'''
-        for index, _ in enumerate(cfg["lb"])
+        for index, item in enumerate(cfg["lb"])
     )
     vod_relay_upstream = f'''upstream vod_relay_{tid} {{
     server unix:/run/cdnmnus/vod-relay-{tid}.sock;
     keepalive 32;
 }}
 ''' if cfg["vod"] else ""
+    playback_api_locations = f'''    location = /api/playback/sessions {{
+        limit_except POST {{ deny all; }}
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_hide_header Content-Type;
+        add_header Content-Type application/vnd.apple.mpegurl always;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
+        proxy_read_timeout 30s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        access_log off;
+    }}
+    location ~ ^/api/playback/sessions/[^/]+/events$ {{
+        limit_except POST {{ deny all; }}
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
+        proxy_read_timeout 30s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        access_log off;
+    }}'''
+    playback_media_location = f'''    location ~ "^/playback/(?:live|vod)/ps-[a-f0-9]{{32}}$" {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 30s;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Via;
+        proxy_hide_header X-Powered-By;
+        access_log off;
+    }}''' if playback_enabled else ""
     vod_public_location = f'''    location ~ ^/(?:movie|series)/ {{
         limit_except GET HEAD {{ deny all; }}
         proxy_pass http://vod_relay_{tid};
@@ -112,6 +163,53 @@ def render_tenant(tenant: dict[str, Any]) -> RenderedTenant:
         access_log off;
         return 503;
     }'''
+    # Playback sessions use only the opt-in /playback route. Keep playlist
+    # acquisition on the legacy origin path unless its broker is explicitly
+    # enabled, so activating playback cannot change a working /get.php flow.
+    if playlist_broker_enabled:
+        playlist_location_http = f'''    location = /get.php {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_proxied any;
+        gzip_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl application/octet-stream;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        proxy_hide_header Set-Cookie;
+        proxy_buffering on;
+        proxy_request_buffering off;
+        proxy_read_timeout 180s;
+    }}'''
+        playlist_location_https = playlist_location_http
+    else:
+        playlist_location_http = f'''    location = /get.php {{
+        proxy_pass http://origin_{tid};
+        proxy_set_header Host {server_names.split()[0]};
+        proxy_set_header Accept-Encoding "";
+        gzip_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl application/octet-stream;
+        proxy_hide_header Content-Type;
+        add_header Content-Type application/vnd.apple.mpegurl always;
+        proxy_hide_header Location;
+        proxy_hide_header Server;
+        sub_filter_types *;
+        sub_filter_once off;
+        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
+    }}'''
+        playlist_location_https = playlist_location_http.replace(
+            "    }}",
+            f'''        sub_filter 'http://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter 'https://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
+        sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
+    }}''',
+            1,
+        )
     content = f'''# Gerado pelo cdnmnus; não editar manualmente.
 proxy_cache_path /var/cache/nginx/cdnmnus/{tid} levels=1:2
     keys_zone=cache_{tid}:32m max_size=2g inactive=2m use_temp_path=off;
@@ -136,19 +234,7 @@ server {{
     location ^~ /.well-known/acme-challenge/ {{ root /var/www/html; }}
     # Alguns aplicativos aceitam somente HTTP. Mantemos as mesmas rotas
     # protegidas do vhost TLS, sempre ocultando a origem nos manifestos.
-    location = /get.php {{
-        proxy_pass http://origin_{tid};
-        proxy_set_header Host {server_names.split()[0]};
-        proxy_set_header Accept-Encoding "";
-        proxy_hide_header Location;
-        proxy_hide_header Server;
-        sub_filter_types *;
-        sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
-    }}
+{playlist_location_http}
     location = /player_api.php {{
         proxy_pass http://origin_{tid};
         proxy_set_header Host {server_names.split()[0]};
@@ -182,6 +268,24 @@ server {{
         proxy_set_header X-Original-URI $request_uri;
         proxy_pass_request_body off;
     }}
+    location ~ ^/play/pt1_[A-Za-z0-9_-]+$ {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+    location ~ "^/play/[A-Za-z0-9_-]{{8,256}}(?:/m3u8)?$" {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+{playback_api_locations}
+{playback_media_location}
 {vod_public_location}
     location ^~ /__cdnmnus_{tid}_origin/ {{
         internal;
@@ -215,22 +319,7 @@ server {{
 
     # XUI get.php returns a playlist body. Rewrite origin authorities at the
     # edge so clients receive only the public hostname, never the XUI IP.
-    location = /get.php {{
-        proxy_pass http://origin_{tid};
-        proxy_set_header Host {server_names.split()[0]};
-        proxy_set_header Accept-Encoding "";
-        proxy_hide_header Location;
-        proxy_hide_header Server;
-        sub_filter_types *;
-        sub_filter_once off;
-        sub_filter 'http://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}:{origin['port']}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(origin['host'])}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'http://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter 'https://{_nginx(canonical)}' '$scheme://{_nginx(cfg['playlist_host'])}';
-        sub_filter '{_nginx(origin['host'])}' '{_nginx(cfg['playlist_host'])}';
-    }}
+{playlist_location_https}
     location = /player_api.php {{
         proxy_pass http://origin_{tid};
         proxy_set_header Host {server_names.split()[0]};
@@ -270,7 +359,25 @@ server {{
         proxy_set_header X-Original-URI $request_uri;
         proxy_pass_request_body off;
     }}
+    location ~ ^/play/pt1_[A-Za-z0-9_-]+$ {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
+    location ~ "^/play/[A-Za-z0-9_-]{{8,256}}(?:/m3u8)?$" {{
+        proxy_pass http://broker_{tid};
+        proxy_set_header X-CDN-Tenant {tid};
+        proxy_set_header X-CDN-Public-Host $host;
+        proxy_set_header X-Broker-Action resolve;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_pass_request_body off;
+    }}
 
+{playback_api_locations}
+{playback_media_location}
 {vod_public_location}
 
     location ^~ /__cdnmnus_{tid}_origin/ {{
@@ -337,6 +444,11 @@ def broker_snapshot(tenants: Iterable[dict[str, Any]], generation: int,
         result["tenants"][cfg["id"]] = {
         "public_hosts": cfg["hosts"], "origin": cfg["origin"],
             "health_host": cfg["health_host"], "load_balancers": cfg["lb"], "vod_hosts": cfg["vod"], "ttl_seconds": 15,
+            "playback_edges": [dict(item) for item in tenant.get("playback_edges", []) if isinstance(item, dict)],
+            "origin_host_header": str(tenant.get("origin_host_header") or cfg["origin"]["host"]),
+            "live_redirect_passthrough": bool(tenant.get("live_redirect_passthrough", False)),
+            "playback_sessions_v1": bool(tenant.get("playback_sessions_v1", 0)),
+            "playlist_broker_enabled": bool(tenant.get("playlist_broker_enabled", False)),
             "vod_policy": {
                 "seeds": [{"host": item["host"],
                            "schemes": ["https"] if item["port"] == 443 else ["http"],

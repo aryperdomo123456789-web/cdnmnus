@@ -13,6 +13,18 @@
     update_cache: true
     cache_valid_time: 3600
 
+- name: Verificar modulo headers-more instalado
+  ansible.builtin.stat:
+    path: /usr/lib/nginx/modules/ngx_http_headers_more_filter_module.so
+  register: headers_more_module
+
+- name: Recusar edge sem modulo headers-more
+  ansible.builtin.assert:
+    that:
+      - headers_more_module.stat.exists
+    fail_msg: 'headers-more nao foi instalado; nao aplicar configuracao Nginx sem ele'
+    quiet: true
+
 - name: Instalar limites do runtime CDN
   ansible.builtin.copy:
     content: |
@@ -32,6 +44,39 @@
       server_tokens off;
       more_clear_headers Server;
     dest: /etc/nginx/conf.d/00-cdnmnus-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Habilitar compressão segura de playlists M3U
+  ansible.builtin.copy:
+    content: |
+      # O nginx.conf base já habilita gzip. Respostas do broker são proxied,
+      # então esta diretiva é necessária para comprimir playlists M3U grandes.
+      gzip_proxied any;
+      gzip_types
+          application/atom+xml
+          application/javascript
+          application/json
+          application/ld+json
+          application/manifest+json
+          application/rss+xml
+          application/vnd.geo+json
+          application/vnd.apple.mpegurl
+          application/x-mpegURL
+          audio/mpegurl
+          application/vnd.ms-fontobject
+          application/x-font-ttf
+          application/x-javascript
+          application/xhtml+xml
+          application/xml
+          font/opentype
+          image/svg+xml
+          text/css
+          text/javascript
+          text/plain
+          text/xml;
+    dest: /etc/nginx/conf.d/05-cdnmnus-compression.conf
     owner: root
     group: root
     mode: '0644'

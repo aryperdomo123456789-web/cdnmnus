@@ -55,6 +55,18 @@
       loop_control:
         loop_var: upstream
         label: "{{ upstream.host }}:{{ upstream.port }}"
+      register: edge_lb_preflight
+      failed_when: false
+
+    - name: Registrar LBs temporariamente indisponíveis sem bloquear o rollout
+      ansible.builtin.debug:
+        msg:
+          edge: "{{ inventory_hostname }}"
+          unavailable_load_balancers: >-
+            {{ edge_lb_preflight.results | default([])
+               | selectattr('failed', 'defined')
+               | selectattr('failed', 'equalto', true)
+               | map(attribute='upstream.host') | list }}
 
     - name: Coletar serviços atualmente disponíveis
       ansible.builtin.service_facts:

@@ -17,11 +17,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+try:
+    from core.playlist_tokens import PlaylistTokenStore
+except ImportError:  # runtime standalone da release
+    from playlist_tokens import PlaylistTokenStore
+
 CONFIG_PATH = Path(os.environ.get("CDNMNUS_TOKEN_CONFIG", "/etc/cdnmnus/token-broker.json"))
 BIND = os.environ.get("CDNMNUS_TOKEN_BIND", "127.0.0.1")
 PORT = int(os.environ.get("CDNMNUS_TOKEN_PORT", "9091"))
 MAX_URI = 4096
 MAX_LOCATION = 8192
+
+
+def safe_host_header(value: object) -> str:
+    host = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", host):
+        raise ValueError("host header interno inválido")
+    return host
 
 
 @dataclass
@@ -97,12 +109,28 @@ STATE = BrokerState()
 def safe_request_uri(raw: str, vod: bool = False) -> str:
     path = urlsplit(raw).path if raw else ""
     credential_manifest = bool(re.fullmatch(r"/[^/?]+/[^/?]+/[0-9]+\.m3u8", path))
-    allowed = raw.startswith(("/movie/", "/series/")) if vod else (raw.startswith(("/hls/", "/live/")) or credential_manifest)
+    provider_manifest = bool(re.fullmatch(r"/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?", path))
+    allowed = raw.startswith(("/movie/", "/series/")) if vod else (raw.startswith(("/hls/", "/live/")) or credential_manifest or provider_manifest)
     if not raw or len(raw) > MAX_URI or not allowed:
         raise ValueError("rota de mídia inválida")
     parsed = urlsplit(raw)
     if parsed.scheme or parsed.netloc or parsed.fragment or ".." in parsed.path.split("/"):
         raise ValueError("URI inválida")
+    return parsed.path + (("?" + parsed.query) if parsed.query else "")
+
+
+def safe_media_uri(raw: str, vod: bool = False) -> str:
+    """Valida o caminho interno recuperado de um token opaco."""
+    value = safe_request_uri(raw, vod=vod) if (raw.startswith(("/hls/", "/live/", "/movie/", "/series/"))) else raw
+    parsed = urlsplit(value)
+    if not value or len(value) > MAX_URI or parsed.scheme or parsed.netloc or parsed.fragment:
+        raise ValueError("caminho tokenizado inválido")
+    if not parsed.path.startswith(("/hls/", "/live/", "/movie/", "/series/")):
+        if not re.fullmatch(r"/[^/]+/[^/]+/[^/]+\.(?:m3u8|ts|aac|mp4|m4s|key)", parsed.path, re.IGNORECASE):
+            if not re.fullmatch(r"/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?", parsed.path):
+                raise ValueError("caminho tokenizado inválido")
+    if ".." in parsed.path.split("/"):
+        raise ValueError("caminho tokenizado inválido")
     return parsed.path + (("?" + parsed.query) if parsed.query else "")
 
 
@@ -128,6 +156,7 @@ def validate_configured_host(host: str) -> None:
 def query_origin(uri: str, config: dict[str, object]) -> str:
     origin = str(config["origin_host"]).lower()
     public_host = str(config["public_host"])
+    origin_host_header = safe_host_header(config.get("origin_host_header") or public_host)
     load_balancers = [str(x).lower() for x in config.get("load_balancers", [])]
     allowed_hosts = {origin, public_host.lower(), *load_balancers}
     host, path = origin, uri
@@ -142,14 +171,16 @@ def query_origin(uri: str, config: dict[str, object]) -> str:
         connection = http.client.HTTPConnection(address, 80, timeout=5)
         try:
             connection.request("GET", path, headers={
-                "Host": public_host if hop == 0 else host,
+                "Host": origin_host_header if hop == 0 else host,
                 "User-Agent": "cdnmnus-token-broker/1.0",
                 "Accept-Encoding": "identity",
                 "Connection": "close",
             })
             response = connection.getresponse()
             location = response.getheader("Location", "")
-            response.read(4096)
+            # A live response may keep the connection open indefinitely. The
+            # status and headers are enough to classify the hop; do not read
+            # the body during this probe or a valid stream can time out.
         finally:
             connection.close()
         if response.status not in redirect_statuses:
@@ -176,9 +207,12 @@ def query_origin(uri: str, config: dict[str, object]) -> str:
             next_path += "?" + parsed.query
         if target_host not in allowed_hosts:
             raise PermissionError("redirect fora da allowlist")
-        # Preserve the legacy contract for providers that repeat the same LB
-        # redirect: the internal LB route is already the safe terminal hop.
-        if target_host == host and target_host in load_balancers:
+        # A configured LB is already an authorized terminal hop. Do not probe
+        # a live response there: many XUI LBs keep the stream open, so waiting
+        # for its headers/body can turn a valid redirect into a timeout.
+        if target_host in load_balancers and (
+            target_host == host or bool(config.get("live_redirect_passthrough", False))
+        ):
             return f"/__cdnmnus_resolved_lb_{load_balancers.index(target_host)}{next_path}"
         host, path = target_host, next_path
     raise LookupError("excesso de redirects")
@@ -188,6 +222,7 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
     """Segue somente a cadeia VOD autorizada e nunca devolve Location público."""
     origin = str(config["origin_host"]).lower()
     public_host = str(config["public_host"])
+    origin_host_header = safe_host_header(config.get("origin_host_header") or public_host)
     vod_hosts = [str(x).lower() for x in config.get("vod_hosts", [])]
     allowed = [origin, *vod_hosts]
     host, path = origin, uri
@@ -201,7 +236,7 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
         connection = http.client.HTTPConnection(address, 80, timeout=8)
         try:
             connection.request("GET", path, headers={
-                "Host": public_host if hop == 0 else host,
+                "Host": origin_host_header if hop == 0 else host,
                 "User-Agent": "cdnmnus-token-broker/1.0",
                 "Accept-Encoding": "identity",
                 "Range": "bytes=0-0",
@@ -209,7 +244,8 @@ def query_vod(uri: str, config: dict[str, object]) -> str:
             })
             response = connection.getresponse()
             location = response.getheader("Location", "")
-            response.read(1)
+            # VOD probing also needs only status and headers. The relay reads
+            # the media body after the destination has been selected.
         finally:
             connection.close()
         if response.status in (HTTPStatus.OK, HTTPStatus.PARTIAL_CONTENT):

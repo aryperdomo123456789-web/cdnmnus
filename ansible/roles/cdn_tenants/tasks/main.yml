@@ -265,6 +265,9 @@
                   proxy_pass http://external_alias_origin;
                   proxy_set_header Host {{ canonical_health_host }};
                   proxy_set_header Accept-Encoding "";
+                  gzip_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl application/octet-stream;
+                  proxy_hide_header Content-Type;
+                  add_header Content-Type application/vnd.apple.mpegurl always;
                   proxy_hide_header Location;
                   proxy_hide_header Server;
                   sub_filter_types *;
@@ -351,6 +354,9 @@
                   proxy_pass http://external_alias_origin;
                   proxy_set_header Host {{ canonical_health_host }};
                   proxy_set_header Accept-Encoding "";
+                  gzip_types application/vnd.apple.mpegurl application/x-mpegURL audio/mpegurl application/octet-stream;
+                  proxy_hide_header Content-Type;
+                  add_header Content-Type application/vnd.apple.mpegurl always;
                   proxy_hide_header Location;
                   proxy_hide_header Server;
                   sub_filter_types *;
@@ -435,10 +441,13 @@
           server {
               listen 80 default_server;
               server_name _;
-              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; }
+              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_read_timeout 180s; proxy_send_timeout 180s; }
               location = /player_api.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; }
               location ~ ^/(?:hls|live|movie|series)/ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; proxy_buffering off; }
               location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
+              # Provider manifests are accepted only in this strict shape;
+              # every other unknown path remains fail-closed below.
+              location ~ "^/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?$" { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
               location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) { access_log off; return 421; }
               location / { return 421; }
           }
@@ -447,10 +456,11 @@
               server_name _;
               ssl_certificate /etc/letsencrypt/live/{{ canonical_health_host }}/fullchain.pem;
               ssl_certificate_key /etc/letsencrypt/live/{{ canonical_health_host }}/privkey.pem;
-              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; }
+              location = /get.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_read_timeout 180s; proxy_send_timeout 180s; }
               location = /player_api.php { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; }
               location ~ ^/(?:hls|live|movie|series)/ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_hide_header Set-Cookie; proxy_buffering off; }
               location ~ ^/[^/]+/[^/]+/[0-9]+\.m3u8$ { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
+              location ~ "^/play/[A-Za-z0-9_-]{8,256}(?:/m3u8)?$" { proxy_pass http://cname_gateway; proxy_set_header Host $host; proxy_set_header Connection ""; proxy_hide_header Server; proxy_hide_header Location; proxy_buffering off; }
               location ~* ^/(?:admin|administrator|phpmyadmin|pma|mysql|database|internal)(?:/|$) { access_log off; return 421; }
               location / { return 421; }
           }

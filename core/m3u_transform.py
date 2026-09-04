@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import json
+import io
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
+
+try:
+    from core.playlist_tokens import PlaylistTokenStore
+except ImportError:  # runtime standalone da release
+    from playlist_tokens import PlaylistTokenStore
 
 try:
     from core.db import normalize_hostname
@@ -26,6 +33,7 @@ FORBIDDEN_HEADERS = {
     "x-powered-by",
     "x-accel-redirect",
 }
+SAFE_MEDIA_FRAGMENT = re.compile(r"^\.(?:aac|key|m4s|mkv|mp4|m3u8|ts)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -56,37 +64,98 @@ def sanitize_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return sanitized
 
 
-def rewrite_public_playlist(playlist: str, snapshot: Mapping[str, Any], *, max_bytes: int = 1_048_576) -> PlaylistTransformResult:
-    if len(playlist.encode("utf-8")) > max_bytes:
+def rewrite_public_playlist(playlist: str, snapshot: Mapping[str, Any], *, max_bytes: int = 1_048_576,
+                            opaque_tokens: bool = False, token_ttl: int = 300,
+                            token_store: PlaylistTokenStore | None = None,
+                            collect_urls: bool = True) -> PlaylistTransformResult:
+    playlist_size = len(playlist) if isinstance(playlist, bytes) else len(playlist.encode("utf-8"))
+    if playlist_size > max_bytes:
         raise ValueError("playlist acima do limite permitido")
-    if not playlist.lstrip().startswith("#EXTM3U"):
+    header = playlist.lstrip() if isinstance(playlist, bytes) else playlist.lstrip().encode("utf-8")
+    if not header.startswith(b"#EXTM3U"):
         raise ValueError("resposta não é uma playlist M3U")
 
     canonical, origin, extra = _snapshot_hosts(snapshot)
     allowed_hosts = {canonical, origin, *extra}
     rewritten_urls: list[str] = []
-    output_lines: list[str] = []
-    for raw_line in playlist.splitlines():
-        line = raw_line.strip()
-        if not line:
-            output_lines.append(raw_line)
-            continue
-        parsed = urlsplit(line)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            output_lines.append(raw_line)
-            continue
-        host = normalize_hostname(parsed.hostname or "")
+    rewritten_count = 0
+    # A playlist pode ser grande. BytesIO evita que o resultado seja mantido
+    # como uma segunda cópia UCS-2/4 antes de voltar a bytes no broker.
+    output = io.BytesIO()
+    tenant_id = str(snapshot.get("tenant_id") or snapshot.get("id") or "")
+    token_store = (token_store or PlaylistTokenStore()) if opaque_tokens else None
+    if token_store is not None:
+        token_store.initialize()
+    token_connection = token_store.connect() if token_store is not None else None
+
+    def transform_url(value: str) -> str:
+        nonlocal rewritten_count
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"", "http", "https"}:
+            raise ValueError("URL de mídia inválida")
+        if parsed.fragment and not SAFE_MEDIA_FRAGMENT.fullmatch(parsed.fragment):
+            raise ValueError("fragmento de mídia inválido")
+        if parsed.scheme and not parsed.netloc:
+            raise ValueError("URL de mídia inválida")
+        host = normalize_hostname(parsed.hostname) if parsed.netloc else origin
         if host not in allowed_hosts:
             raise ValueError(f"playlist pública usa host fora do snapshot: {host}")
-        rewritten = urlunsplit(("http", canonical, parsed.path or "/", parsed.query, ""))
-        rewritten_urls.append(rewritten)
-        output_lines.append(rewritten)
+        path = parsed.path or "/"
+        if not path.startswith("/"):
+            if token_store is None:
+                return value
+            path = "/" + path
+        if not path.startswith("/") or ".." in path.split("/"):
+            raise ValueError("caminho de mídia inválido")
+        # Some Xtream providers append the media extension as a fragment
+        # (for example /play/<id>#.mp4). Fragments never reach the upstream,
+        # but compatible players may rely on them locally.
+        target = urlunsplit(("", "", path, parsed.query, ""))
+        public_fragment = parsed.fragment
+        if token_store is not None:
+            if not tenant_id:
+                raise ValueError("tenant ausente para tokenização")
+            token = token_store.issue(tenant_id, host, target, ttl_seconds=token_ttl,
+                                      connection=token_connection)
+            rewritten_count += 1
+            return urlunsplit(("https", canonical, f"/play/{token}", "", public_fragment))
+        rewritten_count += 1
+        return urlunsplit(("http", canonical, path, parsed.query, public_fragment))
 
-    if not rewritten_urls:
+    uri_attribute = re.compile(r"(?P<prefix>URI=)(?P<quote>[\"'])(?P<url>[^\"']+)(?P=quote)", re.IGNORECASE)
+    try:
+        source = io.BytesIO(playlist) if isinstance(playlist, bytes) else io.StringIO(playlist)
+        for raw_value in source:
+            raw_line = raw_value.decode("utf-8", "strict") if isinstance(raw_value, bytes) else raw_value
+            line = raw_line.strip()
+            if not line:
+                output.write(raw_line.encode("utf-8"))
+                continue
+            if line.startswith("#"):
+                def replace_attribute(match: re.Match[str]) -> str:
+                    return f"{match.group('prefix')}{match.group('quote')}{transform_url(match.group('url'))}{match.group('quote')}"
+                output.write(uri_attribute.sub(replace_attribute, raw_line).encode("utf-8"))
+                continue
+            parsed = urlsplit(line)
+            if parsed.scheme not in {"", "http", "https"} or (parsed.scheme and not parsed.netloc):
+                output.write(raw_line.encode("utf-8"))
+                continue
+            rewritten = transform_url(line)
+            if collect_urls:
+                rewritten_urls.append(rewritten)
+            output.write((rewritten + ("\n" if raw_line.endswith("\n") else "")).encode("utf-8"))
+    except Exception:
+        if token_connection is not None:
+            token_connection.rollback()
+            token_connection.close()
+        raise
+    if token_connection is not None:
+        token_connection.commit()
+        token_connection.close()
+
+    if not rewritten_count:
         raise ValueError("playlist M3U sem URLs de mídia")
-    body = "\n".join(output_lines)
-    if playlist.endswith("\n"):
-        body += "\n"
+    body = output.getvalue().decode("utf-8")
     return PlaylistTransformResult(
         body=body,
         canonical_host=canonical,

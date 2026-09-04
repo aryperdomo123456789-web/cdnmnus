@@ -1,10 +1,22 @@
 # Receita: CNAME DNS-only com teste de aplicação real
 
-Esta receita adiciona um alias de aplicação sem alterar a origem XUI. O
-O tenant atual é `tvbrasil.phpd77.com`; `cdn.phpd77.com` é somente o pool das edges. Um alias externo deve apontar para o hostname do tenant:
+**Regra principal:** o CNAME aponta para o hostname canônico do tenant, nunca
+para o IP do XUI e nunca para um LB de outro tenant. O alias pode ser externo
+e desconhecido do banco; a edge descobre a cadeia DNS e seleciona o tenant
+canônico com segurança.
+
+Esta receita adiciona um alias de aplicação sem alterar a origem XUI. O tenant
+atual é `tvbrasil.phpd77.com`; `cdn.phpd77.com` é somente o pool das edges. Um
+alias externo deve apontar para o hostname do tenant:
 
 ```text
 cnxt.vr766.com  CNAME  tvbrasil.phpd77.com  DNS-only  TTL Auto
+```
+
+Para outro tenant, substitua os dois nomes, sem alterar o procedimento:
+
+```text
+alias.externo.tld  CNAME  turbotv.phpd77.com  DNS-only  TTL Auto
 ```
 
 O registro não deve apontar para `38.46.223.77`. Esse IP é origem e deve
@@ -18,11 +30,11 @@ raiz da zona; aliases como `cnxt.vr766.com` são o formato correto.
 3. Deixe o proxy/nuvem desligado, isto é, `proxied=false` ou `DNS-only`.
 4. Confirme que não existe outro `A`, `AAAA` ou `CNAME` para `cnxt.vr766.com`.
 5. Como o modo é DNS-only, a requisição chega à edge com `Host:
-   cnxt.vr766.com`. A role `cdn_tenants` instala um fallback controlado no
-   vhost padrão: sem cadastrar o alias no banco, ele encaminha somente
-   `get.php`, `player_api.php`, HLS e mídia ao tenant principal e envia o
-   `Host` canônico ao upstream. Rotas administrativas e desconhecidas continuam
-   bloqueadas com `421`.
+   cnxt.vr766.com`. O gateway resolve o CNAME até o tenant canônico, mesmo sem
+   cadastrar o alias no banco, e encaminha somente `get.php`, `player_api.php`,
+   HLS e mídia ao socket isolado do tenant. O `Host` canônico é usado
+   internamente; o alias nunca vira upstream. Rotas administrativas e
+   desconhecidas continuam bloqueadas com `421`.
 6. Para HTTPS, emita um certificado que contenha `cnxt.vr766.com` no SAN, via
    DNS-01 ou outro ACME controlado. DNS-only não altera o certificado da edge.
 7. Aguarde o TTL e confira de resolvedores externos:
@@ -47,6 +59,11 @@ openssl s_client -connect cnxt.vr766.com:443 -servername cnxt.vr766.com </dev/nu
 
 O SAN deve conter `DNS:cnxt.vr766.com`. Sem isso, aplicações que validam TLS
 recusarão a conexão mesmo que o Nginx responda corretamente.
+
+Em uma zona externa, o proprietário da zona cria o CNAME e providencia o SAN.
+O cdnmnus não deve tentar gravar DNS fora das zonas que controla. Em
+particular, um CNAME para `xuilab.phpd77.com` ou `turbotv.phpd77.com` funciona
+sem cadastro do alias, mas não dispensa o certificado HTTPS.
 
 ## 2. Testar como aplicativo
 

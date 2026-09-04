@@ -17,7 +17,10 @@ Auditoria real da edge/XUI e plano objetivo para atingir nível 5/10:
 ## Administração multi-edge local
 
 O plano administrativo novo fica separado do painel legado e usa SQLite em
-modo WAL. A CLI e o painel compartilham `/etc/cdnmnus/admin.db`:
+modo WAL. A CLI, o painel e o worker compartilham o banco autoritativo
+`/var/lib/cdnmnus-admin/admin.db`. O arquivo legado `/etc/cdnmnus/admin.db`
+não é fonte de dados e não deve ser mesclado; `/etc/cdnmnus/panel.db` pertence
+ao painel legado de upstream único e permanece separado:
 
 ```bash
 # Terminal interativo

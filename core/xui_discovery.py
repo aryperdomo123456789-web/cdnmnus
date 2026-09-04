@@ -69,30 +69,43 @@ def _download_playlist(url: str, opener: urllib.request.OpenerDirector) -> str:
 
 def _entries(playlist: str) -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
-    lines = [line.strip() for line in playlist.splitlines()]
-    for index, line in enumerate(lines):
-        if not line.startswith("#EXTINF"):
+    pending_group: str | None = None
+    # One pass is essential for large provider playlists. The previous
+    # look-ahead made discovery quadratic in the number of lines.
+    for raw_line in playlist.splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-        lower = line.lower()
-        group = "live"
-        if any(word in lower for word in ("movie", "filme", "vod")):
-            group = "movie"
-        elif any(word in lower for word in ("series", "serie")):
-            group = "series"
-        for candidate in lines[index + 1:]:
-            if candidate and not candidate.startswith("#"):
-                result.append((group, candidate))
-                break
+        if line.startswith("#EXTINF"):
+            lower = line.lower()
+            pending_group = "live"
+            if any(word in lower for word in ("movie", "filme", "vod")):
+                pending_group = "movie"
+            elif any(word in lower for word in ("series", "serie")):
+                pending_group = "series"
+            continue
+        if pending_group is not None and not line.startswith("#"):
+            result.append((pending_group, line))
+            pending_group = None
     return result
 
 
-def _first_redirect(url: str, opener: urllib.request.OpenerDirector) -> str:
+def _first_redirect(url: str, opener: urllib.request.OpenerDirector,
+                    *, same_host_fallback: str | None = None) -> str:
     current = url
     for _ in range(MAX_REDIRECTS):
         request = urllib.request.Request(current, method="GET", headers={"User-Agent": "cdnmnus-xui-discovery/1"})
         try:
             with opener.open(request, timeout=20) as response:
                 return _public_host(response.geturl())
+        except (TimeoutError, socket.timeout):
+            # Some XUI providers expose long-lived HLS URLs that never return
+            # headers promptly. Only trust a fallback when the media URL is
+            # exactly the M3U host; arbitrary hosts still require validation
+            # through the redirect chain below.
+            if same_host_fallback and urllib.parse.urlsplit(current).hostname == same_host_fallback:
+                return same_host_fallback
+            raise ValueError("amostra de mídia excedeu o tempo limite")
         except urllib.error.HTTPError as exc:
             if exc.code not in {301, 302, 303, 307, 308}:
                 raise ValueError("amostra de mídia recusada pela origem") from exc
@@ -117,8 +130,9 @@ def discover_xui_media(m3u_url: str) -> XUIDiscoveryResult:
         raise ValueError("M3U sem conteúdos de mídia")
     lbs: set[str] = set()
     vod: set[str] = set()
+    playlist_host = parsed.hostname.rstrip(".").lower()
     for group, media_url in selected:
-        host = _first_redirect(media_url, opener)
+        host = _first_redirect(media_url, opener, same_host_fallback=playlist_host)
         (lbs if group == "live" else vod).add(host)
     return XUIDiscoveryResult(tuple(sorted(lbs)), tuple(sorted(vod)),
                               sum(group == "live" for group, _ in selected),

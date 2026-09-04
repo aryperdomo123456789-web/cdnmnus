@@ -47,6 +47,11 @@ PLAYER_BASE_CNAME="${PLAYER_BASE_CNAME:-}"
 PLAYER_BASE_CNAME_ALIASES="${PLAYER_BASE_CNAME_ALIASES:-}"
 PLAYER_SKIP_CNAME="${PLAYER_SKIP_CNAME:-0}"
 USER_AGENT="${USER_AGENT:-XCIPTV / Android 12 / OkHttp/4.9.3}"
+PLAYER_CURL_TIMEOUT="${PLAYER_CURL_TIMEOUT:-30}"
+PLAYER_CURL_CONNECT_TIMEOUT="${PLAYER_CURL_CONNECT_TIMEOUT:-8}"
+# Request compression like the player does, while saving the decompressed M3U
+# so the local playback checks exercise the playlist contents, not gzip bytes.
+CURL_PLAYLIST_OPTS=(--compressed --connect-timeout "${PLAYER_CURL_CONNECT_TIMEOUT}" --max-time "${PLAYER_CURL_TIMEOUT}")
 
 if [[ -z "${CDN_URL}" && -n "${PLAYER_BASE_CDN}" && -n "${PLAYER_USERNAME}" && -n "${PLAYER_PASSWORD}" ]]; then
   CDN_URL="${PLAYER_BASE_CDN%/}/get.php?username=${PLAYER_USERNAME}&password=${PLAYER_PASSWORD}&type=m3u_plus&output=hls"
@@ -72,21 +77,28 @@ redact_url() {
     -e 's#(https?://[^/]+/)[^/]+/[^/]+/([^/]+\.m3u8)#\1[REDACTED]/[REDACTED]/\2#'
 }
 
+fetch_playlist() {
+  local target="$1" output="$2"
+  # Keep credentials out of argv and /proc/<pid>/cmdline. curl reads the URL
+  # from its private stdin configuration instead.
+  printf 'url = "%s"\n' "${target}" | curl --config - -fsSL "${CURL_PLAYLIST_OPTS[@]}" -A "${USER_AGENT}" -o "${output}"
+}
+
 if [[ -n "${CDN_URL}" ]]; then
   echo "[*] Baixando playlist via CDN..."
-  curl -fsSL -A "${USER_AGENT}" "${CDN_URL}" -o "${LAB_DIR}/playlists/cdn_${DATE}.m3u8"
+  fetch_playlist "${CDN_URL}" "${LAB_DIR}/playlists/cdn_${DATE}.m3u8"
   ln -sfn "${LAB_DIR}/playlists/cdn_${DATE}.m3u8" "${LAB_DIR}/playlists/cdn_latest.m3u8"
 fi
 
 if [[ -n "${DIRECT_URL}" ]]; then
   echo "[*] Baixando playlist via IP direto..."
-  curl -fsSL -A "${USER_AGENT}" "${DIRECT_URL}" -o "${LAB_DIR}/playlists/direct_${DATE}.m3u8"
+  fetch_playlist "${DIRECT_URL}" "${LAB_DIR}/playlists/direct_${DATE}.m3u8"
   ln -sfn "${LAB_DIR}/playlists/direct_${DATE}.m3u8" "${LAB_DIR}/playlists/direct_latest.m3u8"
 fi
 
 if [[ -n "${CNAME_URL:-}" ]]; then
   echo "[*] Baixando playlist via CNAME DNS-only..."
-  curl -fsSL -A "${USER_AGENT}" "${CNAME_URL}" -o "${LAB_DIR}/playlists/cname_${DATE}.m3u8"
+  fetch_playlist "${CNAME_URL}" "${LAB_DIR}/playlists/cname_${DATE}.m3u8"
   ln -sfn "${LAB_DIR}/playlists/cname_${DATE}.m3u8" "${LAB_DIR}/playlists/cname_latest.m3u8"
 fi
 
@@ -98,7 +110,7 @@ for alias in "${cname_aliases[@]}"; do
   alias_index=$((alias_index + 1))
   alias_url="${alias}/get.php?username=${PLAYER_USERNAME}&password=${PLAYER_PASSWORD}&type=m3u_plus&output=hls"
   echo "[*] Baixando playlist via CNAME adicional ${alias}..."
-  curl -fsSL -A "${USER_AGENT}" "${alias_url}" -o "${LAB_DIR}/playlists/cname_alias${alias_index}_${DATE}.m3u8"
+  fetch_playlist "${alias_url}" "${LAB_DIR}/playlists/cname_alias${alias_index}_${DATE}.m3u8"
 done
 
 cat > "${LAB_DIR}/reports/sync_${DATE}.txt" <<EOF
